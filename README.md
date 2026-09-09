@@ -10,7 +10,6 @@ Ich habe daher ein Add-on gebaut, das genau das verbessert. Mir war es wichtig, 
 
 <p align="center">
   <img src="docs/screenshots/01_popup_einstellungen.png" width="31%" alt="Haupt-Popup & Live-Vorschau" />
-  <img src="docs/screenshots/02_popup_farben_anpassen.png" width="31%" alt="Farben anpassen" />
   <img src="docs/screenshots/03_popup_eigenes_woerterbuch.png" width="31%" alt="Eigenes Wörterbuch verwalten" />
 </p>
 <p align="center">
