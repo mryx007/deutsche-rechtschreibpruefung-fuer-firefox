@@ -1,4 +1,4 @@
-# Deutsche Rechtschreibprüfung (Lokal & Datenschutzfreundlich)
+# Deutsche Rechtschreibprüfung (Lokal & Offline)
 
 Die Rechtschreibprüfung von Firefox ist in der Zeit stehen geblieben. Völlig fremde Wörter werden vorgeschlagen, oft total unpassende.
 
