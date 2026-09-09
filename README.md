@@ -14,7 +14,7 @@ Ich habe daher ein Add-on gebaut, das genau das verbessert. Mir war es wichtig, 
   <img src="docs/screenshots/03_popup_eigenes_woerterbuch.png" width="31%" alt="Eigenes Wörterbuch verwalten" />
 </p>
 <p align="center">
-  <img src="docs/screenshots/04_inpage_vorschlaege_popup.png" alt="In-Page Vorschlags-Popup direkt am Wort" />
+  <img src="docs/screenshots/Screenshot%202026-09-09%20203858.png" alt="In-Page Vorschlags-Popup direkt am Wort" />
 </p>
 
 ---
