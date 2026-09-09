@@ -1,0 +1,232 @@
+/* ==========================================================================
+   German Smart Spellcheck - Content Styles (Modern Dark / Slate)
+   ========================================================================== */
+
+:root {
+  --sc-bg: #ffffff;
+  --sc-border: #e5e5e5;
+  --sc-text: #606060;
+  --sc-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --sc-font-size: 13.5px;
+  --sc-font-weight: 600;
+  --sc-letter-spacing: 0.65px;
+  --sc-word-opacity: 1;
+  --sc-text-dim: #737373;
+  --sc-typo: #dc2626;
+  --sc-accent: #2563eb;
+  --sc-hover-bg: #f0f0f0;
+  --sc-btn-add-bg: rgba(22, 163, 74, 0.14);
+  --sc-btn-add-color: #16a34a;
+  --sc-btn-add-hover: rgba(22, 163, 74, 0.24);
+  --sc-btn-add-hover-color: #15803d;
+  --sc-btn-ignore-bg: rgba(239, 68, 68, 0.14);
+  --sc-btn-ignore-color: #dc2626;
+  --sc-btn-ignore-hover: rgba(239, 68, 68, 0.24);
+  --sc-btn-ignore-hover-color: #b91c1c;
+}
+
+/* Rote Wellenlinie für Contenteditable (W3C CSS Custom Highlight API) */
+::highlight(sc-typo) {
+  text-decoration: underline wavy var(--sc-typo) !important;
+  text-decoration-color: var(--sc-typo) !important;
+  text-decoration-thickness: 1.5px !important;
+  text-underline-offset: 3px !important;
+  text-decoration-skip-ink: none !important;
+}
+
+/* Rote Wellenlinie für Textarea/Input Mirror-Overlay und DOM-Fallback */
+.sc-typo-highlight,
+.sc-mirror-typo {
+  text-decoration: underline wavy var(--sc-typo) !important;
+  text-decoration-color: var(--sc-typo) !important;
+  text-decoration-thickness: 1.5px !important;
+  text-underline-offset: 3px !important;
+  text-decoration-skip-ink: none !important;
+  background-color: transparent !important;
+  color: transparent !important;
+  flex-shrink: 0 !important;
+}
+
+.sc-typo-highlight {
+  color: inherit !important;
+  cursor: text !important;
+}
+
+/* Mirror-Overlay für <textarea> und <input> */
+.sc-mirror-overlay {
+  position: fixed !important;
+  pointer-events: none !important;
+  background: transparent !important;
+  color: transparent !important;
+  box-sizing: border-box !important;
+  border-style: solid !important;
+  border-color: transparent !important;
+  overflow: hidden !important;
+  /* Direkt unter dem Vorschlagsmenü. Dadurch bleibt die Wellenlinie auch über
+     festen Kopfzeilen und hohen Website-Stacking-Contexts sichtbar. */
+  z-index: 2147483646 !important;
+}
+
+.sc-mirror-overlay-textarea { white-space: pre-wrap !important; word-wrap: break-word !important; }
+.sc-mirror-overlay-input    { white-space: pre !important;      word-wrap: normal !important; }
+
+/* Floating Suggestion Menu Popup */
+.sc-suggestion-menu {
+  all: initial !important;
+  position: absolute !important;
+  z-index: 2147483647 !important;
+  background: var(--sc-bg) !important;
+  border: 1px solid var(--sc-border) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 10px 25px -4px rgba(0, 0, 0, 0.12), 0 3px 8px -2px rgba(0, 0, 0, 0.05), 0 0 0 1px rgba(0, 0, 0, 0.06) !important;
+  color: var(--sc-text) !important;
+  font-family: var(--sc-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif) !important;
+  font-size: var(--sc-font-size) !important;
+  -webkit-font-smoothing: antialiased !important;
+  -moz-osx-font-smoothing: grayscale !important;
+  min-width: 180px !important;
+  width: max-content !important;
+  max-width: min(90vw, 750px) !important;
+  max-height: calc(100vh - 20px) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  padding: 6px !important;
+  box-sizing: border-box !important;
+  user-select: none !important;
+  animation: sc-menu-pop 0.08s ease-out !important;
+}
+
+@keyframes sc-menu-pop {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.sc-suggestion-menu * {
+  box-sizing: border-box !important;
+  font-family: inherit !important;
+}
+
+.sc-menu-header {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  flex-shrink: 0 !important;
+  padding: 3px 4px 5px 8px !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.6px !important;
+  color: var(--sc-text-dim) !important;
+  border-bottom: 1px solid var(--sc-border) !important;
+  margin-bottom: 4px !important;
+}
+
+.sc-menu-title {
+  flex: 1 1 auto !important;
+}
+
+.sc-menu-actions {
+  display: flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+}
+
+.sc-menu-icon-btn {
+  all: unset !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 20px !important;
+  height: 20px !important;
+  border-radius: 5px !important;
+  cursor: pointer !important;
+  flex-shrink: 0 !important;
+  transition: background-color 0.12s ease, color 0.12s ease, opacity 0.1s ease !important;
+}
+
+.sc-menu-icon-btn svg {
+  stroke: currentColor !important;
+  pointer-events: none !important;
+}
+
+.sc-menu-icon-btn:active {
+  opacity: 0.8 !important;
+}
+
+/* Grüner Button (+) für Zum Wörterbuch hinzufügen */
+.sc-menu-btn-add {
+  background: var(--sc-btn-add-bg, rgba(22, 163, 74, 0.14)) !important;
+  color: var(--sc-btn-add-color, #16a34a) !important;
+}
+
+.sc-menu-btn-add:hover {
+  background: var(--sc-btn-add-hover, rgba(22, 163, 74, 0.24)) !important;
+  color: var(--sc-btn-add-hover-color, #15803d) !important;
+}
+
+/* Roter Button (-) für Ignorieren */
+.sc-menu-btn-ignore {
+  background: var(--sc-btn-ignore-bg, rgba(239, 68, 68, 0.14)) !important;
+  color: var(--sc-btn-ignore-color, #dc2626) !important;
+}
+
+.sc-menu-btn-ignore:hover {
+  background: var(--sc-btn-ignore-hover, rgba(239, 68, 68, 0.24)) !important;
+  color: var(--sc-btn-ignore-hover-color, #b91c1c) !important;
+}
+
+.sc-menu-list {
+  display: flex !important;
+  flex-direction: column !important;
+  list-style: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  gap: 2px !important;
+  max-height: 220px !important;
+  overflow-y: auto !important;
+  scrollbar-width: thin !important;
+  scrollbar-color: #b0b0b0 transparent !important;
+}
+
+.sc-menu-item {
+  display: flex !important;
+  align-items: center !important;
+  padding: 7px 10px !important;
+  border-radius: 6px !important;
+  cursor: pointer !important;
+  font-size: var(--sc-font-size) !important;
+  font-weight: var(--sc-font-weight, 600) !important;
+  color: var(--sc-text) !important;
+  transition: background-color 0.1s ease, color 0.1s ease !important;
+}
+
+.sc-menu-item:hover {
+  background: var(--sc-hover-bg) !important;
+  color: var(--sc-text) !important;
+}
+
+.sc-menu-item:active {
+  background: var(--sc-border) !important;
+}
+
+.sc-menu-item-text {
+  flex: 1 1 auto !important;
+  white-space: nowrap !important;
+  letter-spacing: var(--sc-letter-spacing) !important;
+  font-weight: var(--sc-font-weight, 600) !important;
+  color: var(--sc-text) !important;
+  opacity: var(--sc-word-opacity, 1) !important;
+}
+
+.sc-menu-empty {
+  padding: 10px 10px !important;
+  color: var(--sc-text-dim) !important;
+  font-style: italic !important;
+  font-size: 12.5px !important;
+  text-align: center !important;
+}
+

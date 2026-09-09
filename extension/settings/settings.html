@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Spellchecker Einstellungen</title>
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+  <div class="settings-container">
+    <header class="settings-header">
+      <div class="header-brand">
+        <svg class="header-icon" viewBox="0 0 48 48" width="22" height="22">
+          <rect width="48" height="48" rx="10" fill="#2563eb"/>
+          <text x="50%" y="28" text-anchor="middle" font-family="sans-serif" font-size="20" font-weight="bold" fill="#ffffff">De</text>
+          <path d="M 8 38 Q 13 33, 18 38 T 28 38 T 38 38" fill="none" stroke="#ef4444" stroke-width="3" stroke-linecap="round"/>
+        </svg>
+        <span class="header-title">Vorschlagsmenü Anpassen</span>
+      </div>
+      <button type="button" id="resetBtn" class="btn-secondary" title="Auf empfohlene Standardwerte zurücksetzen">Standard</button>
+    </header>
+
+    <main class="settings-body">
+      <!-- 1. Schriftgröße -->
+      <div class="setting-row">
+        <div class="setting-info">
+          <label for="fontSize" class="setting-label">Schriftgröße</label>
+          <span id="fontSizeVal" class="setting-value">13.5 px</span>
+        </div>
+        <input type="range" id="fontSize" min="10" max="22" step="0.5" value="13.5" class="slider">
+      </div>
+
+      <!-- 2. Schriftstärke (Font Weight) -->
+      <div class="setting-row">
+        <div class="setting-info">
+          <label for="fontWeight" class="setting-label">Schriftstärke</label>
+          <span id="fontWeightVal" class="setting-value">600 (Semibold)</span>
+        </div>
+        <input type="range" id="fontWeight" min="300" max="800" step="100" value="600" class="slider">
+      </div>
+
+      <!-- 3. Schriftart (Font Family) -->
+      <div class="setting-row">
+        <div class="setting-info">
+          <label for="fontFamilySelect" class="setting-label">Schriftart</label>
+        </div>
+        <select id="fontFamilySelect" class="select-input">
+          <option value="system">Systemstandard (Modern Sans)</option>
+          <option value="segoe">Segoe UI (Windows)</option>
+          <option value="arial">Arial</option>
+          <option value="verdana">Verdana</option>
+          <option value="roboto">Roboto / Inter</option>
+          <option value="georgia">Georgia (Serif)</option>
+          <option value="consolas">Consolas (Monospace)</option>
+          <option value="comic">Comic Sans (Leger)</option>
+          <option value="custom">Eigene Schriftart...</option>
+        </select>
+        <input type="text" id="customFontInput" placeholder="z. B. Aptos, Outfit, Trebuchet MS" class="custom-font-input hidden" spellcheck="false">
+      </div>
+
+      <!-- 4. Farben anpassen (Wörter, Hintergrund, Beschriftung) -->
+      <div class="setting-row">
+        <div class="setting-info">
+          <label class="setting-label">Farben anpassen</label>
+          <div class="color-preview-tag">
+            <span id="colorSwatchPreview" class="color-swatch-mini"></span>
+            <input type="text" id="hexInput" value="#606060" maxlength="7" class="hex-text-input" spellcheck="false" title="Hex-Farbcode">
+          </div>
+        </div>
+        <!-- Farb-Ziel Tabs -->
+        <div class="color-target-tabs" id="colorTargetTabs">
+          <button type="button" class="color-tab active" data-target="textColor">
+            <span class="tab-indicator" id="textColorIndicator" style="background: #606060;"></span>
+            <span>Wörter</span>
+          </button>
+          <button type="button" class="color-tab" data-target="bgColor">
+            <span class="tab-indicator" id="bgColorIndicator" style="background: #ffffff; border: 1px solid #cbd5e1;"></span>
+            <span>Hintergrund</span>
+          </button>
+          <button type="button" class="color-tab" data-target="labelColor">
+            <span class="tab-indicator" id="labelColorIndicator" style="background: #737373;"></span>
+            <span>Beschriftung</span>
+          </button>
+        </div>
+        <!-- Farb-Presets -->
+        <div class="color-swatches" id="colorSwatches">
+          <button type="button" class="swatch-btn" data-color="#ffffff" style="background:#ffffff; border: 1px solid #cbd5e1;" title="Reinweiß"></button>
+          <button type="button" class="swatch-btn" data-color="#f8fafc" style="background:#f8fafc; border: 1px solid #cbd5e1;" title="Hellgrau"></button>
+          <button type="button" class="swatch-btn" data-color="#e2e8f0" style="background:#e2e8f0" title="Platin"></button>
+          <button type="button" class="swatch-btn" data-color="#94a3b8" style="background:#94a3b8" title="Schiefer"></button>
+          <button type="button" class="swatch-btn active" data-color="#606060" style="background:#606060" title="Standard Grau"></button>
+          <button type="button" class="swatch-btn" data-color="#374151" style="background:#374151" title="Dunkelgrau"></button>
+          <button type="button" class="swatch-btn" data-color="#1e293b" style="background:#1e293b" title="Slate Dark"></button>
+          <button type="button" class="swatch-btn" data-color="#0f172a" style="background:#0f172a" title="Tiefschwarz"></button>
+          <button type="button" class="swatch-btn" data-color="#2563eb" style="background:#2563eb" title="Königsblau"></button>
+          <button type="button" class="swatch-btn" data-color="#059669" style="background:#059669" title="Smaragd"></button>
+        </div>
+        <!-- Farbton & Helligkeits-Slider -->
+        <div class="color-sliders">
+          <input type="range" id="colorHue" min="0" max="360" step="1" value="0" class="slider slider-hue" title="Farbton (Hue)">
+          <input type="range" id="colorLightness" min="0" max="100" step="1" value="38" class="slider slider-lightness" title="Helligkeit">
+        </div>
+      </div>
+
+      <!-- 4. Buchstabenabstand -->
+      <div class="setting-row">
+        <div class="setting-info">
+          <label for="letterSpacing" class="setting-label">Buchstabenabstand</label>
+          <span id="letterSpacingVal" class="setting-value">0.65 px</span>
+        </div>
+        <input type="range" id="letterSpacing" min="0" max="3.0" step="0.05" value="0.65" class="slider">
+      </div>
+
+      <!-- 5. Deckkraft nur für Wörter -->
+      <div class="setting-row">
+        <div class="setting-info">
+          <label for="opacity" class="setting-label">Wort-Deckkraft</label>
+          <span id="opacityVal" class="setting-value">100 %</span>
+        </div>
+        <input type="range" id="opacity" min="20" max="100" step="1" value="100" class="slider">
+      </div>
+
+
+      <!-- Live-Vorschau -->
+      <section class="preview-section">
+        <div class="preview-label">Live-Vorschau</div>
+        <div class="preview-stage">
+          <div id="previewMenu" class="preview-menu">
+            <div class="preview-header">
+              <span class="preview-title">Vorschläge</span>
+              <div class="preview-actions">
+                <button type="button" class="preview-icon-btn preview-btn-add" title="Zum Wörterbuch hinzufügen">
+                  <svg viewBox="0 0 14 14" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+                    <line x1="7" y1="2.5" x2="7" y2="11.5"/>
+                    <line x1="2.5" y1="7" x2="11.5" y2="7"/>
+                  </svg>
+                </button>
+                <button type="button" class="preview-icon-btn preview-btn-ignore" title="Ignorieren">
+                  <svg viewBox="0 0 14 14" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+                    <line x1="2.5" y1="7" x2="11.5" y2="7"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <ul class="preview-list">
+              <li class="preview-item">
+                <span class="preview-item-text">Standardbeispiel</span>
+              </li>
+              <li class="preview-item">
+                <span class="preview-item-text">Korrekturvorschlag</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- Wortlisten-Verwaltung (Eigenes Wörterbuch & Ignorierliste) -->
+      <div class="wordlists-section">
+        <button type="button" id="openUserDictBtn" class="btn-wordlist-nav" title="Persönlich hinzugefügte Wörter verwalten">
+          <div class="btn-wordlist-nav-content">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M2.5 3.5A1.5 1.5 0 0 1 4 2h8a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 12.5v-9z"/>
+              <path d="M5.5 5.5h5M5.5 8.5h3"/>
+            </svg>
+            <span>Eigenes Wörterbuch</span>
+          </div>
+          <span id="userDictBadge" class="wordlist-badge">0 Wörter</span>
+        </button>
+
+        <button type="button" id="openIgnoredWordsBtn" class="btn-wordlist-nav" title="Dauerhaft ignorierte Wörter verwalten">
+          <div class="btn-wordlist-nav-content">
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="8" cy="8" r="5.5"/>
+              <line x1="4" y1="4" x2="12" y2="12"/>
+            </svg>
+            <span>Ignorierliste</span>
+          </div>
+          <span id="ignoredWordsBadge" class="wordlist-badge">0 Wörter</span>
+        </button>
+      </div>
+
+      <!-- 7. Daten-Backup (Export & Import) -->
+      <div class="settings-actions-footer">
+        <button type="button" id="exportBtn" class="btn-action" title="Einstellungen als JSON anzeigen & kopieren">
+          <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2.5 10.5v3a1 1 0 001 1h9a1 1 0 001-1v-3"/>
+            <path d="M8 2v8M4.5 5.5L8 2l3.5 3.5"/>
+          </svg>
+          Exportieren
+        </button>
+        <button type="button" id="importBtn" class="btn-action" title="JSON-Text direkt im Popup einfügen & importieren">
+          <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2.5 10.5v3a1 1 0 001 1h9a1 1 0 001-1v-3"/>
+            <path d="M8 10V2M4.5 6.5L8 10l3.5-3.5"/>
+          </svg>
+          Importieren
+        </button>
+      </div>
+    </main>
+  </div>
+
+  <!-- Wordlist Modal (Wörterbuch & Ignorierliste verwalten) -->
+  <div id="wordListModalOverlay" class="modal-overlay hidden">
+    <div class="modal-card modal-card-wordlist">
+      <div class="modal-header">
+        <span id="wordListModalTitle" class="modal-title">Eigenes Wörterbuch</span>
+        <button type="button" id="closeWordListModal" class="btn-icon-close" title="Schließen">&times;</button>
+      </div>
+      <p id="wordListModalDesc" class="modal-desc">Wörter, die dauerhaft als richtig anerkannt werden:</p>
+      
+      <div class="wordlist-add-bar">
+        <input type="text" id="newWordInput" placeholder="Neues Wort oder Liste (kommagetrennt)..." class="wordlist-input" spellcheck="false">
+        <button type="button" id="addWordBtn" class="btn-wordlist-add" title="Wörter hinzufügen">Hinzufügen</button>
+      </div>
+
+      <input type="text" id="filterWordInput" placeholder="In Liste suchen..." class="wordlist-filter hidden" spellcheck="false">
+
+      <div id="wordListContainer" class="wordlist-chips-container">
+        <!-- Dynamische Chips: <span class="word-chip"><span>crafter</span><button class="btn-chip-del">&times;</button></span> -->
+      </div>
+
+      <div class="modal-footer wordlist-footer">
+        <div class="wordlist-footer-left">
+          <span id="wordListFooterCount" class="wordlist-footer-count">0 Einträge</span>
+          <button type="button" id="clearWordListBtn" class="btn-wordlist-clear hidden" title="Alle Wörter dieser Liste entfernen">Alle leeren</button>
+        </div>
+        <button type="button" id="closeWordListPrimaryBtn" class="btn-modal-primary">Fertig</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- In-Popup JSON Dialog für Import & Export -->
+  <div id="jsonModalOverlay" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <span id="jsonModalTitle" class="modal-title">JSON Daten</span>
+        <button type="button" id="closeJsonModal" class="btn-icon-close" title="Schließen">&times;</button>
+      </div>
+      <p id="jsonModalDesc" class="modal-desc">Füge hier deine gesicherte JSON ein:</p>
+      <textarea id="jsonTextArea" class="json-textarea" placeholder='{"settings": {...}}' spellcheck="false"></textarea>
+      <div class="modal-footer">
+        <button type="button" id="jsonSecondaryBtn" class="btn-modal-secondary">Aus Zwischenablage</button>
+        <button type="button" id="jsonPrimaryBtn" class="btn-modal-primary">Übernehmen</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="settingsToast" class="settings-toast hidden" role="status" aria-live="polite"></div>
+
+  <script src="settings.js"></script>
+</body>
+</html>

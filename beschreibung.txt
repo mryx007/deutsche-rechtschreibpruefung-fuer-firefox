@@ -1,0 +1,22 @@
+Die Rechtschreibungprüfung von Firefox ist in der Zeit stehen geblieben. Völlig fremde Wörter werden vorgeschlagen, oft total unpassende.
+
+Ich hab daher ein Addon gebaut, der genau das verbessert. Mir war es wichtig, alles lokal laufen zu lassen. KI Lösungen können abgeschaltet werden, Daten in der Cloud können mitgeschrieben werden. API Anbieter können Geld verlangen. Hier ist alles lokal.
+
+Das Addon arbeitet so: Falschgeschriebene Wörter werden mathematisch mit der Liste abgeglichen und im kleinen Popup angezeigt. Wörter in Sätzen werden durch das BART Sprachmodell lokal überprüft. Es ist trainiert die Beste vorhersage zu machen, für das falsch geschriebe Wort. 
+
+Natürlich klappt es nicht bei jedem einzlenen Wort. Aber es gibt eine Auswahl und zu 98,73% passt es. Es erkennt super lange zusammengesetzte Wörter als auch kurze. 
+
+
+Technische Beschreiung:
+
+Es verzichtet vollständig auf externe Schnittstellen, Cloud-APIs oder Hintergrund-Telemetrie. Das Add-on benötigt keine Benutzerregistrierung. Die gesamte linguistische Analyse, Tokenisierung und neuronale Kontextbewertung findet ausschließlich lokal statt. Persönliche Ausnahmelisten und benutzerdefinierte Wörter verbleiben strikt in der lokalen Browser-Storage (browser.storage.local)
+
+### Benchmarks und Performanz-Kennzahlen:
+
+* 99,22 % Erkennungsrate auf realem deutschem Gegenwartswortschatz (validiert gegen ein Benchmark-Korpus von 20.000 hochfrequenten Wörtern aus Nachrichten- und Medienquellen).
+* 2.696.775 abgedeckte Wortformen und Lemmata.
+
+
+### Warum beträgt die Downloadgröße ca. 120 MB?
+
+Konventionelle Rechtschreibprüfungen lagern ihre Rechenlast und Sprachmodelle auf externe Rechenzentren aus. Jeder Tastenanschlag wird über HTTP/WebSocket an Fremdserver übertragen, was kleine Downloadgrößen ermöglicht, jedoch sensible Textdaten exponiert.

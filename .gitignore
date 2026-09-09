@@ -1,0 +1,26 @@
+# Sensible Zugangsdaten & Upload-Skripte (NIEMALS auf GitHub veröffentlichen!)
+extension/Erweiterungen hochladen.py
+Erweiterungen hochladen.py
+.firefox-upload.json
+*.pem
+*.key
+
+# Lokale Entwicklungs- & Test-Ordner
+scratch/
+web-ext-artifacts/
+__pycache__/
+*.pyc
+
+# Große Roharchive & temporäre Daten
+morf_dict.zip
+extension/RfdR_Amtliches-Regelwerk_2024.pdf
+*.pdf
+
+# Lose Screenshots im Root
+/*.png
+!extension/icons/*.png
+
+# OS-Artefakte
+Thumbs.db
+Desktop.ini
+.DS_Store

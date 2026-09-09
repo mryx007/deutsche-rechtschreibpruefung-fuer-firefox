@@ -1,0 +1,70 @@
+{
+  "manifest_version": 2,
+  "name": "Deutsche Rechtschreibpr\u00fcfung (lokal)",
+  "version": "1.1.7",
+  "description": "Deutsche Rechtschreibpr\u00fcfung \u00fcber 2,7 Mio. Wortformen)",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "deutsch-spellchecker@local",
+      "strict_min_version": "145.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
+    }
+  },
+  "content_security_policy": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "<all_urls>"
+  ],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png",
+    "128": "icons/icon-128.png"
+  },
+  "browser_action": {
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png"
+    },
+    "default_title": "Spellchecker Einstellungen",
+    "default_popup": "settings/settings.html"
+  },
+  "options_ui": {
+    "page": "settings/settings.html",
+    "open_in_tab": false
+  },
+  "background": {
+    "scripts": [
+      "data/ort.min.js",
+      "background/background.js"
+    ],
+    "persistent": true
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "all_frames": true,
+      "match_about_blank": true,
+      "js": [
+        "content/content.js"
+      ],
+      "css": [
+        "content/content.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    "data/*",
+    "content/*"
+  ]
+}
