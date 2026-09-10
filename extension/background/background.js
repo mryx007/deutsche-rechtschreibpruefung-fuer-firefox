@@ -758,6 +758,41 @@ const GERMAN_NOUN_SIGNAL_WORDS = new Set([
   "euer", "eure", "eures", "eurer", "eurem", "euren"
 ]);
 
+const GERMAN_DETERMINERS = new Set([
+  "der", "die", "das", "des", "dem", "den",
+  "ein", "eine", "eines", "einer", "einem", "einen",
+  "kein", "keine", "keines", "keiner", "keinem", "keinen",
+  "mein", "meine", "meines", "meiner", "meinem", "meinen",
+  "dein", "deine", "deines", "deiner", "deinem", "deinen",
+  "sein", "seine", "seines", "seiner", "seinem", "seinen",
+  "ihr", "ihre", "ihres", "ihrer", "ihrem", "ihren",
+  "unser", "unsere", "unseres", "unserer", "unserem", "unseren",
+  "euer", "eure", "eures", "eurer", "eurem", "euren",
+  "jeder", "jede", "jedes", "jedem", "jeden",
+  "mancher", "manche", "manches", "manchem", "manchen",
+  "solcher", "solche", "solches", "solchem", "solchen",
+  "welcher", "welche", "welches", "welchem", "welchen",
+  "beim", "zum", "zur", "vom", "im", "am", "ins", "ans", "aufs", "fürs", "durchs", "hinters", "unters", "übers", "vors"
+]);
+
+const GERMAN_NON_ADJECTIVE_WORDS = new Set([
+  "immer", "nimmer", "wieder", "heute", "gestern", "morgen", "gerne", "gern",
+  "zusammen", "miteinander", "bisher", "vorher", "nachher", "eher", "lieber",
+  "öfter", "oft", "sofort", "bereits", "ebenfalls", "eben", "bald", "nie", "schon",
+  "vorne", "hinten", "oben", "unten", "innen", "außen", "drinnen", "draußen",
+  "gelesen", "gesehen", "geschrieben", "gesagt", "gemacht", "getan", "geworden", "geblieben"
+]);
+
+function isParticipleOrAdverb(word) {
+  if (GERMAN_NON_ADJECTIVE_WORDS.has(word)) return true;
+  if (word.startsWith("ge") && (word.endsWith("en") || word.endsWith("t") || word.endsWith("et"))) {
+    if (!/(?:enes|enem|ener|ene|enen|etes|etem|eter|ete|eten)$/.test(word)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function detectNounSignal(context, start) {
   if (!context || typeof context !== "string") return false;
   let s = start;
@@ -798,8 +833,20 @@ function detectNounSignal(context, start) {
     const rawPrev = words[words.length - 2];
     const prevWord = rawPrev.toLowerCase().replace(/[^\p{L}]/gu, '');
     const isLastLower = rawLast.length > 0 && rawLast[0] === rawLast[0].toLowerCase();
-    if (isLastLower && GERMAN_NOUN_SIGNAL_WORDS.has(prevWord) && /(?:em|en|er|es|e)$/.test(lastWord)) {
-      return true;
+    if (isLastLower && !isParticipleOrAdverb(lastWord)) {
+      if (GERMAN_DETERMINERS.has(prevWord) && /(?:em|en|er|es|e)$/.test(lastWord)) {
+        return true;
+      }
+      if (GERMAN_NOUN_SIGNAL_WORDS.has(prevWord)) {
+        if (/(?:em|er|es)$/.test(lastWord)) {
+          return true;
+        }
+        if (lastWord.endsWith("en")) {
+          if (targetWord && !/(?:en|eln|ern)$/.test(targetWord)) {
+            return true;
+          }
+        }
+      }
     }
   }
   return false;
