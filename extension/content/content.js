@@ -8,6 +8,7 @@
 
   let activeMenu = null;
   let activeMenuKey = null;
+  let activeMenuField = null;
   let nextFieldId = 1;
   const inputMetadata = new WeakMap();
 
@@ -26,7 +27,16 @@
         overlay: null,
         debounceTimer: null,
         contextTimer: null,
-        lastText: (isTextInput(el) ? el.value : el.textContent) || ""
+        mutationFrame: null,
+        editableObserver: null,
+        revision: 0,
+        spellingRequest: 0,
+        contextRequest: 0,
+        isComposing: false,
+        detachedSince: 0,
+        renderedOverlayKey: "",
+        overlayPositionKey: "",
+        lastText: readFieldText(el)
       };
       inputMetadata.set(el, meta);
     }
@@ -50,41 +60,6 @@
     return (!before || !connector.test(before)) && (!after || !connector.test(after));
   }
 
-  function adjustErrors(errors, oldText, newText) {
-    if (oldText === newText || !errors || errors.length === 0) return errors || [];
-
-    let prefix = 0;
-    const minLen = Math.min(oldText.length, newText.length);
-    while (prefix < minLen && oldText[prefix] === newText[prefix]) {
-      prefix++;
-    }
-
-    let oldSuffix = oldText.length;
-    let newSuffix = newText.length;
-    while (oldSuffix > prefix && newSuffix > prefix && oldText[oldSuffix - 1] === newText[newSuffix - 1]) {
-      oldSuffix--;
-      newSuffix--;
-    }
-
-    const delta = newText.length - oldText.length;
-    const oldEditStart = prefix;
-    const oldEditEnd = oldSuffix;
-
-    return errors.map(err => {
-      if (err.end <= oldEditStart) {
-        return err;
-      }
-      if (err.start >= oldEditEnd) {
-        return {
-          ...err,
-          start: err.start + delta,
-          end: err.end + delta
-        };
-      }
-      return null;
-    }).filter(Boolean);
-  }
-
   function isTextInput(el) {
     if (!el || el.disabled || el.readOnly) return false;
     if (el.tagName === "TEXTAREA") return true;
@@ -99,10 +74,19 @@
     const elNode = target.nodeType === 3 ? target.parentElement : target;
     if (!elNode || elNode.disabled || elNode.readOnly) return null;
     if (isTextInput(elNode)) return elNode;
-    const ce = elNode.isContentEditable
-      ? (elNode.closest("[contenteditable='true'], [contenteditable=''], .ProseMirror, [role='textbox']") || elNode)
-      : elNode.closest?.("[contenteditable='true'], [contenteditable=''], .ProseMirror, [role='textbox']");
-    return ce?.isContentEditable ? ce : null;
+    if (!elNode.isContentEditable) {
+      const ce = elNode.closest?.("[contenteditable='true'], [contenteditable=''], .ProseMirror, [role='textbox']");
+      return ce?.isContentEditable ? ce : null;
+    }
+    let ce = elNode;
+    while (ce.parentElement && ce.parentElement.isContentEditable) {
+      ce = ce.parentElement;
+    }
+    const editorRoot = ce.closest?.("[contenteditable='true'], [contenteditable=''], .ProseMirror, [role='textbox']");
+    if (editorRoot?.isContentEditable) {
+      ce = editorRoot;
+    }
+    return ce;
   }
 
   function getEventTargetContainer(event) {
@@ -290,9 +274,10 @@
     document.querySelectorAll(".sc-suggestion-menu").forEach((el) => el.remove());
     activeMenu = null;
     activeMenuKey = null;
+    activeMenuField = null;
   }
 
-  function showMenu(targetRect, word, suggestions, onSelect, onIgnore) {
+  function showMenu(targetRect, word, suggestions, onSelect, onIgnore, ownerField) {
     closeMenu();
 
     const menu = document.createElement("div");
@@ -474,6 +459,7 @@
     menu.style.setProperty("visibility", "hidden", "important");
     document.body.appendChild(menu);
     activeMenu = menu;
+    activeMenuField = ownerField;
     activeMenuKey = null;
 
     reposition();
@@ -483,7 +469,7 @@
   }
 
   // Gemeinsamer Öffnungs- und Nachlade-Workflow für alle Feldtypen
-  async function openSuggestionMenu(targetRect, error, context, meta, onSelect, onIgnore) {
+  async function openSuggestionMenu(targetRect, error, context, meta, onSelect, onIgnore, ownerField) {
     const { word, start, end, isFirstWord = false } = error;
     const menuKey = `${meta.fieldId}:${start}:${end}:${word}`;
     if (activeMenu && activeMenuKey === menuKey) {
@@ -494,6 +480,7 @@
       closeMenu();
     }
     activeMenuKey = menuKey;
+    activeMenuField = ownerField;
 
     let suggestions = Array.isArray(error.quickSuggestions) && error.quickSuggestions.length > 0
       ? [...error.quickSuggestions]
@@ -521,7 +508,7 @@
     // Wurde während der Abfrage weggeklickt oder ein anderes Wort geöffnet?
     if (activeMenuKey !== menuKey) return;
 
-    showMenu(targetRect, word, suggestions, onSelect, onIgnore);
+    showMenu(targetRect, word, suggestions, onSelect, onIgnore, ownerField);
     activeMenuKey = menuKey;
   }
 
@@ -530,71 +517,95 @@
   // =========================================================================
 
   const activeOverlayInputs = new Set();
+  const activeEditableElements = new Set();
+  const styledShadowRoots = new WeakSet();
+  const hasHighlightAPI = typeof CSS !== "undefined" && typeof Highlight !== "undefined" && Boolean(CSS.highlights);
+  const MIRROR_STYLE_PROPS = [
+    'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+    'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
+    'boxSizing', 'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'fontStretch', 'fontVariant',
+    'fontKerning', 'fontOpticalSizing', 'fontFeatureSettings', 'fontVariationSettings',
+    'lineHeight', 'letterSpacing', 'wordSpacing', 'textAlign', 'textAlignLast',
+    'textIndent', 'textTransform', 'direction', 'unicodeBidi', 'writingMode', 'textOrientation',
+    'wordBreak', 'overflowWrap', 'tabSize'
+  ];
 
   const inputResizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver((entries) => {
     for (const entry of entries) {
       const input = entry.target;
       const meta = inputMetadata.get(input);
       if (meta?.overlay) {
-        syncOverlay(input, meta);
+        positionOverlay(input, meta);
       }
     }
   }) : null;
 
-  let overlayCheckRaf = null;
-  function scheduleOverlayCheck() {
-    if (activeOverlayInputs.size === 0) return;
-    if (overlayCheckRaf) return;
-    overlayCheckRaf = requestAnimationFrame(() => {
-      overlayCheckRaf = null;
-      for (const input of [...activeOverlayInputs]) {
-        if (!input.isConnected) {
-          const meta = inputMetadata.get(input);
-          if (meta?.overlay) {
-            inputResizeObserver?.unobserve(input);
-            meta.overlay.remove();
-            meta.overlay = null;
-          }
-          activeOverlayInputs.delete(input);
-          continue;
-        }
-        const meta = inputMetadata.get(input);
-        if (meta?.overlay) {
-          syncOverlay(input, meta);
-        } else {
-          activeOverlayInputs.delete(input);
-        }
-      }
-    });
+  function readFieldText(el) {
+    return (isTextInput(el) ? el.value : el.textContent) || "";
   }
 
-  const overlayMutationObserver = typeof MutationObserver !== "undefined" ? new MutationObserver(() => {
-    scheduleOverlayCheck();
-  }) : null;
+  function invalidateFieldText(el, meta, text) {
+    if (text === meta.lastText) return false;
+    meta.revision++;
+    meta.lastText = text;
+    // Keine alten Offsets verschieben: Rich-Text-Editoren können in einem
+    // Schritt mehrere Knoten ersetzen. Bis zum schnellen Neuscan ist eine
+    // fehlende Linie korrekt, eine Linie am falschen Wort dagegen nicht.
+    meta.errors = [];
+    if (isTextInput(el)) syncOverlay(el, meta);
+    else rebuildHighlights();
+    return true;
+  }
 
-  try {
-    overlayMutationObserver?.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["style", "class", "hidden", "aria-hidden"],
-      childList: true,
-      subtree: true
+  function ensureEditableObserver(ce, meta) {
+    if (isTextInput(ce) || meta.editableObserver || typeof MutationObserver === "undefined") return;
+    meta.editableObserver = new MutationObserver(() => {
+      if (meta.mutationFrame) return;
+      meta.mutationFrame = requestAnimationFrame(() => {
+        meta.mutationFrame = null;
+        if (!ce.isConnected) {
+          meta.editableObserver?.disconnect();
+          meta.editableObserver = null;
+          activeEditableElements.delete(ce);
+          rebuildHighlights();
+          return;
+        }
+        const changed = invalidateFieldText(ce, meta, readFieldText(ce));
+        if (changed) scheduleScan(ce, 120);
+        else rebuildHighlights();
+      });
     });
-  } catch {}
+    meta.editableObserver.observe(ce, { childList: true, characterData: true, subtree: true });
+  }
 
-  function syncOverlay(input, meta) {
-    if (!isTextInput(input) || !input.isConnected) {
-      if (meta?.overlay) {
-        inputResizeObserver?.unobserve(input);
-        meta.overlay.remove();
-        meta.overlay = null;
-      }
-      activeOverlayInputs.delete(input);
-      return;
+  function destroyOverlay(input, meta) {
+    if (meta?.overlay) {
+      inputResizeObserver?.unobserve(input);
+      meta.overlay.remove();
+      meta.overlay = null;
+      meta.renderedOverlayKey = "";
+      meta.overlayPositionKey = "";
     }
+    activeOverlayInputs.delete(input);
+  }
+
+  function getOverlayHost(input) {
+    if (input?.getRootNode?.() !== document) return document.documentElement || document.body;
+    const fullscreen = document.fullscreenElement;
+    if (fullscreen && fullscreen !== input && fullscreen.contains(input)) return fullscreen;
+    const dialog = input.closest?.("dialog[open]");
+    if (dialog) return dialog;
+    try {
+      const popover = input.closest?.(":popover-open");
+      if (popover) return popover;
+    } catch {}
+    return document.documentElement || document.body;
+  }
+
+  function ensureOverlay(input, meta) {
     if (!meta.overlay) {
       const overlay = document.createElement("div");
       overlay.className = `sc-mirror-overlay ${input.tagName === "INPUT" ? "sc-mirror-overlay-input" : "sc-mirror-overlay-textarea"}`;
-      (document.documentElement || document.body).appendChild(overlay);
       meta.overlay = overlay;
       inputResizeObserver?.observe(input);
       input.addEventListener("scroll", () => {
@@ -604,7 +615,20 @@
         }
       }, { passive: true });
     }
+    const host = getOverlayHost(input);
+    if (meta.overlay.parentNode !== host) {
+      host.appendChild(meta.overlay);
+      meta.overlayPositionKey = "";
+    }
+    return meta.overlay;
+  }
 
+  function positionOverlay(input, meta) {
+    if (!isTextInput(input) || !input.isConnected || !meta?.overlay) {
+      destroyOverlay(input, meta);
+      return false;
+    }
+    ensureOverlay(input, meta);
     const rect = input.getBoundingClientRect();
     const style = window.getComputedStyle(input);
     const isHidden = style.display === "none" ||
@@ -614,15 +638,27 @@
                      rect.height === 0 ||
                      (style.position !== "fixed" && input.offsetParent === null);
 
+    const isSingleLineInput = input.tagName === "INPUT";
+    const styleValues = MIRROR_STYLE_PROPS.map(prop => style[prop] ?? "");
+    const positionKey = [
+      isHidden, isSingleLineInput, input.wrap || "", rect.top, rect.left, rect.width, rect.height,
+      input.offsetWidth, input.clientWidth, input.offsetHeight, input.clientHeight, ...styleValues
+    ].join("\u0000");
+
+    if (positionKey === meta.overlayPositionKey) {
+      meta.overlay.scrollTop = input.scrollTop;
+      meta.overlay.scrollLeft = input.scrollLeft;
+      return !isHidden;
+    }
+    meta.overlayPositionKey = positionKey;
+
     if (isHidden) {
-      meta.overlay.style.display = "none";
-      meta.overlay.textContent = "";
-      activeOverlayInputs.delete(input);
-      return;
+      meta.overlay.style.setProperty("display", "none", "important");
+      return false;
     }
 
-    const isSingleLineInput = input.tagName === "INPUT";
     meta.overlay.style.setProperty("display", isSingleLineInput ? "flex" : "block", "important");
+    meta.overlay.style.setProperty("white-space", isSingleLineInput || input.wrap === "off" ? "pre" : "pre-wrap", "important");
     meta.overlay.style.setProperty("top", `${rect.top}px`, "important");
     meta.overlay.style.setProperty("left", `${rect.left}px`, "important");
     meta.overlay.style.setProperty("width", `${rect.width}px`, "important");
@@ -642,13 +678,8 @@
       meta.overlay.style.justifyContent = "normal";
     }
 
-    [
-      'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
-      'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
-      'boxSizing', 'fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing', 'textAlign',
-      'textIndent', 'textTransform', 'direction', 'wordBreak', 'overflowWrap', 'tabSize'
-    ].forEach((prop) => {
-      if (style[prop] !== undefined) meta.overlay.style[prop] = style[prop];
+    MIRROR_STYLE_PROPS.forEach((prop, index) => {
+      if (styleValues[index] !== undefined) meta.overlay.style[prop] = styleValues[index];
     });
 
     if (!isSingleLineInput) {
@@ -657,24 +688,38 @@
         meta.overlay.style.paddingRight = `${(parseFloat(style.paddingRight) || 0) + scrollbarWidth}px`;
       }
     }
+    meta.overlay.scrollTop = input.scrollTop;
+    meta.overlay.scrollLeft = input.scrollLeft;
+    return true;
+  }
+
+  function syncOverlay(input, meta) {
+    if (!isTextInput(input) || !input.isConnected) {
+      destroyOverlay(input, meta);
+      return;
+    }
 
     const val = input.value || "";
     meta.errors = meta.errors.filter(error => errorStillMatches(val, error));
 
     if (meta.errors.length === 0) {
-      meta.overlay.textContent = "";
-      meta.overlay.style.display = "none";
-      activeOverlayInputs.delete(input);
+      destroyOverlay(input, meta);
       return;
     }
 
+    ensureOverlay(input, meta);
     activeOverlayInputs.add(input);
-    inputResizeObserver?.observe(input);
+    ensureStateWatch();
+    if (!positionOverlay(input, meta)) return;
+
+    const errors = [...meta.errors].sort((a, b) => a.start - b.start || a.end - b.end);
+    const renderKey = `${val}\u0000${errors.map(error => `${error.start}:${error.end}:${error.word}`).join("|")}`;
+    if (renderKey === meta.renderedOverlayKey) return;
+    meta.renderedOverlayKey = renderKey;
 
     meta.overlay.textContent = "";
     let lastIndex = 0;
     const fragment = document.createDocumentFragment();
-    const errors = [...meta.errors].sort((a, b) => a.start - b.start || a.end - b.end);
     for (const error of errors) {
       if (error.start < lastIndex) continue;
       if (error.start > lastIndex) {
@@ -707,8 +752,12 @@
     let clickedMark = null;
 
     for (const m of meta.overlay.querySelectorAll(".sc-mirror-typo")) {
-      const r = m.getBoundingClientRect();
-      if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top - 3 && e.clientY <= r.bottom + 6) {
+      const r = Array.from(m.getClientRects()).find(rect =>
+        rect.width > 0 &&
+        e.clientX >= rect.left && e.clientX <= rect.right &&
+        e.clientY >= rect.top - 3 && e.clientY <= rect.bottom + 6
+      );
+      if (r) {
         clickedWord = m.textContent.trim();
         targetRect = r;
         clickedMark = m;
@@ -741,7 +790,9 @@
         firstRange.setStart(textNode, 0);
         firstRange.setEnd(textNode, 1);
         const firstRect = firstRange.getBoundingClientRect();
-        if (firstRect && firstRect.width > 0 && e.clientX <= firstRect.left + firstRect.width / 2) {
+        if (firstRect && firstRect.width > 0 &&
+            e.clientY >= firstRect.top - 3 && e.clientY <= firstRect.bottom + 6 &&
+            e.clientX <= firstRect.left + firstRect.width / 2) {
           return;
         }
 
@@ -749,7 +800,9 @@
         lastRange.setStart(textNode, textNode.textContent.length - 1);
         lastRange.setEnd(textNode, textNode.textContent.length);
         const lastRect = lastRange.getBoundingClientRect();
-        if (lastRect && lastRect.width > 0 && e.clientX >= lastRect.right - lastRect.width / 2) {
+        if (lastRect && lastRect.width > 0 &&
+            e.clientY >= lastRect.top - 3 && e.clientY <= lastRect.bottom + 6 &&
+            e.clientX >= lastRect.right - lastRect.width / 2) {
           return;
         }
       }
@@ -757,10 +810,13 @@
 
     const onSelect = (selected) => {
       input.focus();
-      input.setRangeText(selected, idx, end, "end");
+      try {
+        input.setRangeText(selected, idx, end, "end");
+      } catch {
+        input.value = `${val.slice(0, idx)}${selected}${val.slice(end)}`;
+      }
       input.dispatchEvent(new Event("input", { bubbles: true }));
-      removeError(meta, error);
-      syncOverlay(input, meta);
+      invalidateFieldText(input, meta, readFieldText(input));
       scheduleScan(input);
     };
 
@@ -769,15 +825,89 @@
       syncOverlay(input, meta);
     };
 
-    openSuggestionMenu(targetRect, error, val, meta, onSelect, onIgnore);
+    openSuggestionMenu(targetRect, error, val, meta, onSelect, onIgnore, input);
   }
 
   // =========================================================================
-  // 3. Contenteditable (Zero DOM-Mutation via W3C CSS Custom Highlight API)
+  // 3. Contenteditable (ohne Text-DOM-Mutation via W3C CSS Custom Highlight API)
   // =========================================================================
 
-  const hasHighlightAPI = typeof CSS !== "undefined" && typeof Highlight !== "undefined" && Boolean(CSS.highlights);
-  const activeEditableElements = new Set();
+  function buildTextIndex(root) {
+    const segments = [];
+    const chunks = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
+    let offset = 0;
+    let node;
+    while ((node = walker.nextNode())) {
+      const text = node.textContent || "";
+      if (!text.length) continue;
+      segments.push({ node, start: offset, end: offset + text.length });
+      chunks.push(text);
+      offset += text.length;
+    }
+    return { text: chunks.join(""), segments, length: offset };
+  }
+
+  function resolveTextPoint(index, offset, isStart) {
+    if (!index || offset < 0 || offset > index.length || index.segments.length === 0) return null;
+    if (offset === 0) return { node: index.segments[0].node, offset: 0 };
+    for (const segment of index.segments) {
+      const matches = isStart
+        ? offset >= segment.start && offset < segment.end
+        : offset > segment.start && offset <= segment.end;
+      if (matches) return { node: segment.node, offset: offset - segment.start };
+    }
+    if (offset === index.length) {
+      const last = index.segments[index.segments.length - 1];
+      return { node: last.node, offset: last.end - last.start };
+    }
+    return null;
+  }
+
+  function getRangeForOffsets(root, start, end, index = buildTextIndex(root), makeStatic = false) {
+    if (start < 0 || end <= start || end > index.length) return null;
+    const from = resolveTextPoint(index, start, true);
+    const to = resolveTextPoint(index, end, false);
+    if (!from || !to) return null;
+    if (makeStatic && typeof StaticRange !== "undefined") {
+      return new StaticRange({
+        startContainer: from.node,
+        startOffset: from.offset,
+        endContainer: to.node,
+        endOffset: to.offset
+      });
+    }
+    const range = document.createRange();
+    range.setStart(from.node, from.offset);
+    range.setEnd(to.node, to.offset);
+    return range;
+  }
+
+  function getTextOffset(index, targetNode, localOffset) {
+    const segment = index.segments.find(item => item.node === targetNode);
+    if (!segment) return -1;
+    return segment.start + Math.max(0, Math.min(localOffset, segment.end - segment.start));
+  }
+
+  function ensureHighlightStyleRoot(ce) {
+    const root = ce?.getRootNode?.();
+    if (!root?.host || styledShadowRoots.has(root)) return;
+    try {
+      const style = document.createElement("style");
+      style.dataset.scHighlightStyle = "";
+      style.textContent = `
+        ::highlight(sc-typo) {
+          text-decoration: underline wavy #dc2626 !important;
+          text-decoration-color: #dc2626 !important;
+          text-decoration-thickness: 1.5px !important;
+          text-underline-offset: 3px !important;
+          text-decoration-skip-ink: none !important;
+        }
+      `;
+      root.appendChild(style);
+      styledShadowRoots.add(root);
+    } catch {}
+  }
 
   function rebuildHighlights() {
     if (!hasHighlightAPI) return;
@@ -790,31 +920,22 @@
         continue;
       }
       const meta = inputMetadata.get(el);
-      if (!meta || meta.errors.length === 0) continue;
+      if (!meta || meta.errors.length === 0) {
+        activeEditableElements.delete(el);
+        continue;
+      }
 
       const style = window.getComputedStyle(el);
       if (style.display === "none" || style.visibility === "hidden" || (style.position !== "fixed" && el.offsetParent === null)) {
         continue;
       }
 
-      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false);
+      const index = buildTextIndex(el);
+      meta.errors = meta.errors.filter(error => errorStillMatches(index.text, error));
       const errors = [...meta.errors].sort((a, b) => a.start - b.start || a.end - b.end);
-      let globalOffset = 0;
-      let node;
-      while ((node = walker.nextNode())) {
-        const text = node.textContent || "";
-        const nodeEnd = globalOffset + text.length;
-        for (const error of errors) {
-          if (error.start < globalOffset || error.end > nodeEnd) continue;
-          const localStart = error.start - globalOffset;
-          const localEnd = error.end - globalOffset;
-          if (text.slice(localStart, localEnd) !== error.word) continue;
-          const r = new Range();
-          r.setStart(node, localStart);
-          r.setEnd(node, localEnd);
-          allRanges.push(r);
-        }
-        globalOffset = nodeEnd;
+      for (const error of errors) {
+        const range = getRangeForOffsets(el, error.start, error.end, index, true);
+        if (range) allRanges.push(range);
       }
     }
 
@@ -829,182 +950,85 @@
 
   function updateContentEditableHighlights(ce, meta) {
     if (!hasHighlightAPI || !ce || !ce.isConnected) return;
-    activeEditableElements.add(ce);
+    ensureHighlightStyleRoot(ce);
+    ensureEditableObserver(ce, meta);
+    if (meta.errors.length > 0) {
+      activeEditableElements.add(ce);
+      ensureStateWatch();
+    }
+    else activeEditableElements.delete(ce);
     rebuildHighlights();
   }
 
-  function getWordAtPoint(x, y) {
+  function getCaretTextOffsetAtPoint(index, x, y) {
     let node = null;
-    let offset = 0;
-
+    let offset = -1;
     if (document.caretPositionFromPoint) {
-      const pos = document.caretPositionFromPoint(x, y);
-      if (pos) {
-        node = pos.offsetNode;
-        offset = pos.offset;
-      }
+      const position = document.caretPositionFromPoint(x, y);
+      node = position?.offsetNode || null;
+      offset = position?.offset ?? -1;
     } else if (document.caretRangeFromPoint) {
       const range = document.caretRangeFromPoint(x, y);
-      if (range) {
-        node = range.startContainer;
-        offset = range.startOffset;
-      }
+      node = range?.startContainer || null;
+      offset = range?.startOffset ?? -1;
     }
+    return node?.nodeType === 3 ? getTextOffset(index, node, offset) : -1;
+  }
 
-    if (!node) return null;
+  function findContentEditableErrorAtPoint(ce, meta, x, y) {
+    const index = buildTextIndex(ce);
+    meta.errors = meta.errors.filter(error => errorStillMatches(index.text, error));
 
-    if (node.nodeType === 1) {
-      if (node.childNodes && offset < node.childNodes.length) {
-        const child = node.childNodes[offset];
-        if (child?.nodeType === 3) {
-          node = child;
-          offset = 0;
-        } else if (child?.firstChild?.nodeType === 3) {
-          node = child.firstChild;
-          offset = 0;
-        }
-      } else if (node.childNodes && offset >= node.childNodes.length && node.lastChild) {
-        const last = node.lastChild;
-        if (last?.nodeType === 3) {
-          node = last;
-          offset = last.textContent.length;
-        }
-      }
+    for (const error of meta.errors) {
+      const range = getRangeForOffsets(ce, error.start, error.end, index);
+      if (!range || range.toString() !== error.word) continue;
+      const targetRect = Array.from(range.getClientRects()).find(rect =>
+        rect.width > 0 &&
+        x >= rect.left && x <= rect.right &&
+        y >= rect.top - 3 && y <= rect.bottom + 6
+      );
+      if (targetRect) return { error, index, range, targetRect };
     }
-
-    if (node.nodeType !== 3) return null;
-
-    const text = node.textContent;
-    if (!text) return null;
-
-    const wordRegex = /[\p{L}\p{M}]+(?:[-\u2010-\u2015\u2212'\u2018\u2019\u02BC][\p{L}\p{M}]+)*/gu;
-    let match;
-    while ((match = wordRegex.exec(text)) !== null) {
-      const start = match.index;
-      const end = start + match[0].length;
-      if (offset >= start && offset <= end) {
-        const range = document.createRange();
-        range.setStart(node, start);
-        range.setEnd(node, end);
-        return {
-          word: match[0],
-          node,
-          range,
-          start,
-          end,
-          caretOffset: offset
-        };
-      }
-    }
-
     return null;
-  }
-
-  function getTextOffset(root, targetNode, localOffset) {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
-    let offset = 0;
-    let node;
-    while ((node = walker.nextNode())) {
-      if (node === targetNode) return offset + localOffset;
-      offset += (node.textContent || "").length;
-    }
-    return -1;
-  }
-
-  function getRangeForOffsets(root, start, end) {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
-    let offset = 0;
-    let startNode = null;
-    let startOffset = 0;
-    let endNode = null;
-    let endOffset = 0;
-    let node;
-    while ((node = walker.nextNode())) {
-      const length = (node.textContent || "").length;
-      if (!startNode && start >= offset && start <= offset + length) {
-        startNode = node;
-        startOffset = start - offset;
-      }
-      if (end >= offset && end <= offset + length) {
-        endNode = node;
-        endOffset = end - offset;
-        break;
-      }
-      offset += length;
-    }
-    if (!startNode || !endNode) return null;
-    const range = document.createRange();
-    range.setStart(startNode, startOffset);
-    range.setEnd(endNode, endOffset);
-    return range;
   }
 
   function handleContentEditableClick(ce, e) {
     const meta = getInputMeta(ce);
     if (!meta || meta.errors.length === 0) return;
 
-    let hit = getWordAtPoint(e.clientX, e.clientY);
-    let hitStart = hit ? getTextOffset(ce, hit.node, hit.start) : -1;
-    let error = hit ? meta.errors.find(item => item.start === hitStart && item.end === hitStart + hit.word.length && item.word === hit.word) : null;
-    if (!hit || !error) {
-      hit = getWordAtPoint(e.clientX, e.clientY - 4) || getWordAtPoint(e.clientX, e.clientY - 8);
-      hitStart = hit ? getTextOffset(ce, hit.node, hit.start) : -1;
-      error = hit ? meta.errors.find(item => item.start === hitStart && item.end === hitStart + hit.word.length && item.word === hit.word) : null;
-    }
-    if (!hit || !error) return;
+    const hit = findContentEditableErrorAtPoint(ce, meta, e.clientX, e.clientY);
+    if (!hit) return;
 
-    const word = hit.word;
-    const targetRect = hit.range.getBoundingClientRect();
-    if (!targetRect || targetRect.width === 0) return;
+    const { error, index, targetRect } = hit;
 
-    // Nur öffnen, wenn der Klick tatsächlich innerhalb des Wortes oder auf dessen Wellenlinie lag.
-    // Verhindert, dass Klicks vor, hinter oder neben das Wort (z. B. am Zeilenende im Twitch-Chat) das Popup triggern.
-    if (
-      e.clientX < targetRect.left ||
-      e.clientX > targetRect.right ||
-      e.clientY < targetRect.top - 3 ||
-      e.clientY > targetRect.bottom + 6
-    ) {
-      return;
-    }
+    // Ein Klick direkt vor oder hinter dem markierten Wort gehört nicht zum Fehler.
+    const caretOffset = getCaretTextOffsetAtPoint(index, e.clientX, e.clientY);
+    if (caretOffset >= 0 && (caretOffset <= error.start || caretOffset >= error.end)) return;
 
-    // Caret-Positionierung vor oder hinter dem Wort (|wort oder wort|) darf kein Popup triggern:
-    if (hit.caretOffset <= hit.start || hit.caretOffset >= hit.end) {
-      return;
-    }
-
-    // Geometrische Absicherung an den Wortkanten (Klick in die äußere Hälfte des Randbuchstabens):
+    // Auch bei auf mehrere Textknoten verteilter Formatierung bleiben die beiden
+    // äußeren Buchstaben geometrisch die exakten Wortgrenzen.
     try {
-      const textNode = hit.node;
-      if (textNode && textNode.nodeType === 3 && hit.word.length > 0) {
-        const firstRange = document.createRange();
-        firstRange.setStart(textNode, hit.start);
-        firstRange.setEnd(textNode, hit.start + 1);
-        const firstRect = firstRange.getBoundingClientRect();
-        if (firstRect && firstRect.width > 0 && e.clientX <= firstRect.left + firstRect.width / 2) {
-          return;
-        }
+      const firstRange = getRangeForOffsets(ce, error.start, error.start + 1, index);
+      const firstRect = firstRange?.getBoundingClientRect();
+      if (firstRect?.width > 0 &&
+          e.clientY >= firstRect.top - 3 && e.clientY <= firstRect.bottom + 6 &&
+          e.clientX <= firstRect.left + firstRect.width / 2) return;
 
-        const lastRange = document.createRange();
-        lastRange.setStart(textNode, hit.end - 1);
-        lastRange.setEnd(textNode, hit.end);
-        const lastRect = lastRange.getBoundingClientRect();
-        if (lastRect && lastRect.width > 0 && e.clientX >= lastRect.right - lastRect.width / 2) {
-          return;
-        }
-      }
+      const lastRange = getRangeForOffsets(ce, error.end - 1, error.end, index);
+      const lastRect = lastRange?.getBoundingClientRect();
+      if (lastRect?.width > 0 &&
+          e.clientY >= lastRect.top - 3 && e.clientY <= lastRect.bottom + 6 &&
+          e.clientX >= lastRect.right - lastRect.width / 2) return;
     } catch {}
 
     const onSelect = (selected) => {
       ce.focus();
       const sel = window.getSelection();
 
-      let rangeToUse = null;
-      if (hit.range.startContainer.isConnected && hit.range.toString() === word) {
-        rangeToUse = hit.range;
-      } else {
-        rangeToUse = getRangeForOffsets(ce, error.start, error.end);
-      }
+      const currentIndex = buildTextIndex(ce);
+      const rangeToUse = errorStillMatches(currentIndex.text, error)
+        ? getRangeForOffsets(ce, error.start, error.end, currentIndex)
+        : null;
 
       if (rangeToUse) {
         sel?.removeAllRanges();
@@ -1028,9 +1052,7 @@
         }
       }
 
-      removeError(meta, error);
-      rebuildHighlights();
-
+      invalidateFieldText(ce, meta, readFieldText(ce));
       scheduleScan(ce);
     };
 
@@ -1039,32 +1061,37 @@
       rebuildHighlights();
     };
 
-    const allText = ce.textContent || "";
-    openSuggestionMenu(targetRect, error, allText, meta, onSelect, onIgnore);
+    openSuggestionMenu(targetRect, error, index.text, meta, onSelect, onIgnore, ce);
   }
 
   // =========================================================================
   // 4. Zentraler Scan & Event-Loop
   // =========================================================================
 
+  function renderField(el, meta) {
+    if (isTextInput(el)) syncOverlay(el, meta);
+    else updateContentEditableHighlights(el, meta);
+  }
+
   async function scanField(el) {
-    const isInput = isTextInput(el);
-    const text = (isInput ? el.value : el.textContent) || "";
+    if (!el?.isConnected) return;
     const meta = getInputMeta(el);
+    const text = readFieldText(el);
+    const revision = meta.revision;
+    const request = ++meta.spellingRequest;
 
     if (!text.trim() || text.length < 2) {
       meta.errors = [];
       meta.lastText = text;
-      if (isInput) syncOverlay(el, meta);
-      else updateContentEditableHighlights(el, meta);
+      renderField(el, meta);
       return;
     }
 
     try {
       const res = await browser.runtime.sendMessage({ action: "check_text", text });
-      // Race-Condition-Schutz: Textinhalt hat sich während der async Inferenz geändert -> Resultat verwerfen
-      const currentText = (isInput ? el.value : el.textContent) || "";
-      if (currentText !== text) return;
+      // Nur die neueste Antwort für exakt diese Feldrevision darf rendern.
+      if (!el.isConnected || meta.revision !== revision ||
+          meta.spellingRequest !== request || readFieldText(el) !== text) return;
 
       const spellingErrors = (res?.errors || []).filter(error => errorStillMatches(text, error));
       const occupied = new Set(spellingErrors.map(error => error.start));
@@ -1073,22 +1100,25 @@
       );
       meta.errors = [...spellingErrors, ...preservedContextErrors].sort((a, b) => a.start - b.start);
       meta.lastText = text;
-    } catch {}
+    } catch {
+      return;
+    }
 
-    if (isInput) syncOverlay(el, meta);
-    else updateContentEditableHighlights(el, meta);
+    renderField(el, meta);
   }
 
   async function scanContextField(el) {
-    const isInput = isTextInput(el);
-    const text = (isInput ? el.value : el.textContent) || "";
-    if (!text.trim() || text.length < 3) return;
+    if (!el?.isConnected) return;
     const meta = getInputMeta(el);
+    const text = readFieldText(el);
+    const revision = meta.revision;
+    const request = ++meta.contextRequest;
+    if (!text.trim() || text.length < 3) return;
 
     try {
       const res = await browser.runtime.sendMessage({ action: "check_context", text });
-      const currentText = (isInput ? el.value : el.textContent) || "";
-      if (currentText !== text) return;
+      if (!el.isConnected || meta.revision !== revision ||
+          meta.contextRequest !== request || readFieldText(el) !== text) return;
 
       const spellingErrors = meta.errors.filter(error => error.kind !== "context");
       const occupied = new Set(spellingErrors.map(error => error.start));
@@ -1101,14 +1131,14 @@
       return;
     }
 
-    if (isInput) syncOverlay(el, meta);
-    else updateContentEditableHighlights(el, meta);
+    renderField(el, meta);
   }
 
   function scheduleScan(target, delay = 120) {
     const el = getTargetContainer(target);
-    if (!el) return;
+    if (!el?.isConnected) return;
     const meta = getInputMeta(el);
+    if (!isTextInput(el)) ensureEditableObserver(el, meta);
     clearTimeout(meta.debounceTimer);
     meta.debounceTimer = setTimeout(() => scanField(el), delay);
     clearTimeout(meta.contextTimer);
@@ -1117,14 +1147,143 @@
 
   function shouldScanFast(event) {
     if (event.isComposing) return false;
-    if (event.inputType === "insertFromPaste" || event.inputType === "insertFromDrop" ||
-        event.inputType === "insertParagraph" || event.inputType === "insertLineBreak") {
-      return true;
-    }
-    if (typeof event.inputType === "string" && event.inputType.startsWith("delete")) {
-      return true;
-    }
+    if (typeof event.inputType === "string" &&
+        event.inputType !== "insertText" && event.inputType !== "insertCompositionText") return true;
     return typeof event.data === "string" && /[.\s,!?:\-–—();»«"']/u.test(event.data);
+  }
+
+  // Ein einziger leichter Wächter deckt Änderungen ab, für die Webseiten kein
+  // input-Event senden (value-Zuweisung, Root-Austausch, Layoutbewegung). Er
+  // läuft nur solange ein Feld fokussiert ist oder tatsächlich Fehler rendert.
+  let watchedField = null;
+  let stateWatchTimer = null;
+  const pendingDetachedFields = new Set();
+
+  function getDeepActiveElement() {
+    let active = document.activeElement;
+    while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+    return active;
+  }
+
+  function retireField(el, meta) {
+    clearTimeout(meta?.debounceTimer);
+    clearTimeout(meta?.contextTimer);
+    if (meta?.mutationFrame) cancelAnimationFrame(meta.mutationFrame);
+    meta?.editableObserver?.disconnect();
+    if (meta) {
+      meta.editableObserver = null;
+      meta.mutationFrame = null;
+    }
+    if (meta?.overlay) destroyOverlay(el, meta);
+    activeEditableElements.delete(el);
+    pendingDetachedFields.delete(el);
+  }
+
+  function fieldKind(el) {
+    if (el?.tagName === "TEXTAREA") return "textarea";
+    if (el?.tagName === "INPUT" && isTextInput(el)) return `input:${(el.type || "text").toLowerCase()}`;
+    return el?.isContentEditable ? "contenteditable" : "";
+  }
+
+  function collectReplacementFields(oldField) {
+    const fields = new Set();
+    const selector = "textarea, input, [contenteditable='true'], [contenteditable=''], .ProseMirror, [role='textbox']";
+    const addRoot = (root) => {
+      root?.querySelectorAll?.(selector).forEach(candidate => {
+        const field = getTargetContainer(candidate);
+        if (field) fields.add(field);
+      });
+    };
+    addRoot(document);
+    const oldRoot = oldField?.getRootNode?.();
+    if (oldRoot && oldRoot !== document) addRoot(oldRoot);
+    const focused = getTargetContainer(getDeepActiveElement());
+    if (focused?.isConnected) fields.add(focused);
+    return [...fields];
+  }
+
+  function findReplacementField(oldField, meta, candidates) {
+    const kind = fieldKind(oldField);
+    if (!kind) return null;
+    const sameKind = candidates.filter(candidate => candidate.isConnected && fieldKind(candidate) === kind);
+    if (sameKind.length === 0) return null;
+    const focused = getTargetContainer(getDeepActiveElement());
+    if (focused && sameKind.includes(focused)) return focused;
+    const exact = sameKind.find(candidate => readFieldText(candidate) === meta.lastText);
+    return exact || (sameKind.length === 1 ? sameKind[0] : null);
+  }
+
+  function recoverDetachedField(oldField, meta) {
+    if (activeMenuField === oldField) closeMenu();
+    if (!meta) {
+      retireField(oldField, meta);
+      return;
+    }
+    const replacement = findReplacementField(oldField, meta, collectReplacementFields(oldField));
+    if (!replacement) {
+      if (!meta.detachedSince) meta.detachedSince = Date.now();
+      if (Date.now() - meta.detachedSince < 640) {
+        pendingDetachedFields.add(oldField);
+        return;
+      }
+      retireField(oldField, meta);
+      return;
+    }
+
+    const replacementText = readFieldText(replacement);
+    const transferableErrors = replacementText === meta.lastText
+      ? meta.errors.filter(error => errorStillMatches(replacementText, error))
+      : [];
+    retireField(oldField, meta);
+
+    const replacementMeta = getInputMeta(replacement);
+    replacementMeta.errors = transferableErrors;
+    replacementMeta.lastText = replacementText;
+    renderField(replacement, replacementMeta);
+    ensureStateWatch(replacement);
+    scheduleScan(replacement, 120);
+  }
+
+  function ensureStateWatch(field = null) {
+    if (field) watchedField = field;
+    if (!stateWatchTimer) stateWatchTimer = setTimeout(runStateWatch, 160);
+  }
+
+  function runStateWatch() {
+    stateWatchTimer = null;
+    const previousWatchedField = watchedField;
+    const focusedField = getTargetContainer(getDeepActiveElement());
+    watchedField = focusedField?.isConnected ? focusedField : null;
+
+    const fields = new Set([...activeOverlayInputs, ...activeEditableElements, ...pendingDetachedFields]);
+    if (previousWatchedField) fields.add(previousWatchedField);
+    if (watchedField) fields.add(watchedField);
+
+    let highlightsChanged = false;
+    for (const el of fields) {
+      const meta = inputMetadata.get(el);
+      if (!el.isConnected || !meta) {
+        recoverDetachedField(el, meta);
+        highlightsChanged = true;
+        continue;
+      }
+      meta.detachedSince = 0;
+      pendingDetachedFields.delete(el);
+
+      const changed = invalidateFieldText(el, meta, readFieldText(el));
+      if (changed) {
+        if (activeMenu) closeMenu();
+        if (!meta.isComposing) scheduleScan(el, 120);
+        highlightsChanged = highlightsChanged || !isTextInput(el);
+      } else if (isTextInput(el) && meta.overlay) {
+        positionOverlay(el, meta);
+      }
+    }
+
+    if (highlightsChanged) rebuildHighlights();
+    if (watchedField || activeOverlayInputs.size > 0 || activeEditableElements.size > 0 || pendingDetachedFields.size > 0) {
+      ensureStateWatch();
+    }
   }
 
   // Mousedown: Singleton-Schließen und punktgenaue Klick-Erkennung
@@ -1147,60 +1306,71 @@
     }
   }, true);
 
-  // Während eines Wortes nicht prüfen: Erst eine Wortgrenze, Einfügen oder
-  // Fokussieren startet den Scan. So wird das gerade getippte Wort nicht rot.
-  ['input', 'paste', 'focusin'].forEach((type) => {
-    document.addEventListener(type, (e) => {
-      const el = getEventTargetContainer(e);
-      if (!el) return;
-      if (type === 'focusin') disableNativeSpellcheck(el);
-      if (type === 'input') {
-        const meta = getInputMeta(el);
-        const isInput = isTextInput(el);
-        const currentText = (isInput ? el.value : el.textContent) || "";
+  document.addEventListener("focusin", (e) => {
+    const el = getEventTargetContainer(e);
+    if (!el) return;
+    const meta = getInputMeta(el);
+    if (!isTextInput(el)) ensureEditableObserver(el, meta);
+    invalidateFieldText(el, meta, readFieldText(el));
+    ensureStateWatch(el);
+    scheduleScan(el, 120);
+  }, true);
 
-        if (typeof meta.lastText === "string" && meta.lastText !== currentText) {
-          meta.errors = adjustErrors(meta.errors, meta.lastText, currentText);
-        }
-        meta.lastText = currentText;
+  document.addEventListener("input", (e) => {
+    const el = getEventTargetContainer(e);
+    if (!el) return;
+    const meta = getInputMeta(el);
+    meta.isComposing = Boolean(e.isComposing);
+    invalidateFieldText(el, meta, readFieldText(el));
+    ensureStateWatch(el);
+    if (activeMenu) closeMenu();
+    if (!meta.isComposing) scheduleScan(el, shouldScanFast(e) ? 120 : 600);
+  }, true);
 
-        if (isInput) {
-          syncOverlay(el, meta);
-        } else {
-          meta.errors = meta.errors.filter(error => errorStillMatches(currentText, error));
-          rebuildHighlights();
-        }
-      }
-      if (type !== 'input') {
-        scheduleScan(el, 120);
-      } else if (!e.isComposing) {
-        const isFast = shouldScanFast(e);
-        scheduleScan(el, isFast ? 120 : 600);
-      }
-    }, true);
-  });
+  document.addEventListener("compositionstart", (e) => {
+    const el = getEventTargetContainer(e);
+    if (!el) return;
+    getInputMeta(el).isComposing = true;
+    ensureStateWatch(el);
+  }, true);
+
+  document.addEventListener("compositionend", (e) => {
+    const el = getEventTargetContainer(e);
+    if (!el) return;
+    const meta = getInputMeta(el);
+    meta.isComposing = false;
+    invalidateFieldText(el, meta, readFieldText(el));
+    ensureStateWatch(el);
+    scheduleScan(el, 120);
+  }, true);
+
+  document.addEventListener("selectionchange", () => {
+    const selection = window.getSelection();
+    const el = getTargetContainer(selection?.anchorNode);
+    if (!el || isTextInput(el)) return;
+    const wasKnown = inputMetadata.has(el);
+    const meta = getInputMeta(el);
+    ensureEditableObserver(el, meta);
+    const changed = invalidateFieldText(el, meta, readFieldText(el));
+    ensureStateWatch(el);
+    if (!wasKnown || changed) scheduleScan(el, 120);
+  }, { passive: true });
 
   // Globale passive Listener für Input-Overlays mit rAF-Throttling (kein Reflow-Thrashing)
   let scrollRaf = null;
-  function onWindowScrollOrResize() {
-    if (activeMenu) closeMenu();
+  function scheduleOverlayPositions() {
     if (activeOverlayInputs.size === 0) return;
     if (scrollRaf) return;
     scrollRaf = requestAnimationFrame(() => {
       scrollRaf = null;
       for (const input of activeOverlayInputs) {
-        if (!input.isConnected) {
-          const meta = inputMetadata.get(input);
-          if (meta?.overlay) {
-            meta.overlay.remove();
-            meta.overlay = null;
-          }
-          activeOverlayInputs.delete(input);
+        const meta = inputMetadata.get(input);
+        if (!input.isConnected || !meta) {
+          retireField(input, meta);
           continue;
         }
-        const meta = inputMetadata.get(input);
         if (meta?.overlay && meta.errors.length > 0) {
-          syncOverlay(input, meta);
+          positionOverlay(input, meta);
         } else {
           activeOverlayInputs.delete(input);
         }
@@ -1208,11 +1378,33 @@
     });
   }
 
+  function composedContains(ancestor, node) {
+    let current = node;
+    while (current) {
+      if (current === ancestor) return true;
+      current = current.parentNode || current.getRootNode?.().host || null;
+    }
+    return false;
+  }
+
+  function scrollMovesMenuAnchor(event) {
+    if (event?.type === "resize") return true;
+    const target = event?.target;
+    if (target === window || target === document || target === document.documentElement || target === document.body) return true;
+    if (!activeMenuField?.isConnected) return true;
+    return composedContains(target, activeMenuField);
+  }
+
+  function onWindowScrollOrResize(event) {
+    if (activeMenu && scrollMovesMenuAnchor(event)) closeMenu();
+    scheduleOverlayPositions();
+  }
+
   window.addEventListener("resize", onWindowScrollOrResize, { passive: true });
   window.addEventListener("scroll", onWindowScrollOrResize, { passive: true, capture: true });
 
-  ['mousedown', 'click', 'focusin', 'focusout', 'transitionend', 'animationend'].forEach((evt) => {
-    document.addEventListener(evt, scheduleOverlayCheck, { passive: true });
+  ["transitionend", "animationend"].forEach((eventName) => {
+    document.addEventListener(eventName, scheduleOverlayPositions, { passive: true, capture: true });
   });
 
   document.addEventListener("keydown", () => { if (activeMenu) closeMenu(); });
