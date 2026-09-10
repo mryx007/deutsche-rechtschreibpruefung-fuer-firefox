@@ -745,7 +745,7 @@ const GERMAN_NOUN_SIGNAL_WORDS = new Set([
   "ab", "an", "am", "ans", "auf", "aufs", "außer", "dank", "durch", "durchs",
   "für", "fürs", "gegen", "hinter", "hinters", "in", "im", "ins", "neben",
   "ohne", "seit", "über", "übers", "unter", "unters", "vor", "vors", "vorm",
-  "während", "wegen", "wider", "zwischen",
+  "trotz", "während", "wegen", "wider", "zwischen",
   "der", "die", "das", "des", "dem", "den",
   "ein", "eine", "eines", "einer", "einem", "einen",
   "kein", "keine", "keines", "keiner", "keinem", "keinen",

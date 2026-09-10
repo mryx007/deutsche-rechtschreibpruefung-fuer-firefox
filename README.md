@@ -134,10 +134,23 @@ Dieses Add-on bringt das gesamte deutsche Wörterbuch, den Häufigkeitskorpus un
 │       ├── ort-wasm-simd-threaded.jsep.wasm
 │       └── ort-wasm-simd-threaded.jsep.mjs
 │
+├── tests/                         # Automatisierte Test-Suiten
+│   └── test_sentences_suite.js    # 100+ Satz- und Nomen-Signal-Regressionstests
+│
 ├── build/                         # Python-Build-Skripte zur DAFSA- und Korpus-Erzeugung
 │   ├── build_dafsa.py
 │   └── ...
 └── .gitignore                     # Schließt sensible Upload-Skripte und Caches aus
+```
+
+---
+
+## Tests ausführen
+
+Die automatisierte Satz- und Regressionssuite prüft Nomen-Signale, Groß-/Kleinschreibung, Kontext-Vorschläge und DAFSA-Kandidaten direkt über die Node.js-Laufzeit:
+
+```bash
+node tests/test_sentences_suite.js
 ```
 
 ---
