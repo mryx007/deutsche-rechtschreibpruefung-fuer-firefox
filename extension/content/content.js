@@ -531,9 +531,60 @@
 
   const activeOverlayInputs = new Set();
 
+  const inputResizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const input = entry.target;
+      const meta = inputMetadata.get(input);
+      if (meta?.overlay) {
+        syncOverlay(input, meta);
+      }
+    }
+  }) : null;
+
+  let overlayCheckRaf = null;
+  function scheduleOverlayCheck() {
+    if (activeOverlayInputs.size === 0) return;
+    if (overlayCheckRaf) return;
+    overlayCheckRaf = requestAnimationFrame(() => {
+      overlayCheckRaf = null;
+      for (const input of [...activeOverlayInputs]) {
+        if (!input.isConnected) {
+          const meta = inputMetadata.get(input);
+          if (meta?.overlay) {
+            inputResizeObserver?.unobserve(input);
+            meta.overlay.remove();
+            meta.overlay = null;
+          }
+          activeOverlayInputs.delete(input);
+          continue;
+        }
+        const meta = inputMetadata.get(input);
+        if (meta?.overlay) {
+          syncOverlay(input, meta);
+        } else {
+          activeOverlayInputs.delete(input);
+        }
+      }
+    });
+  }
+
+  const overlayMutationObserver = typeof MutationObserver !== "undefined" ? new MutationObserver(() => {
+    scheduleOverlayCheck();
+  }) : null;
+
+  try {
+    overlayMutationObserver?.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["style", "class", "hidden", "aria-hidden"],
+      childList: true,
+      subtree: true
+    });
+  } catch {}
+
   function syncOverlay(input, meta) {
     if (!isTextInput(input) || !input.isConnected) {
       if (meta?.overlay) {
+        inputResizeObserver?.unobserve(input);
         meta.overlay.remove();
         meta.overlay = null;
       }
@@ -545,6 +596,7 @@
       overlay.className = `sc-mirror-overlay ${input.tagName === "INPUT" ? "sc-mirror-overlay-input" : "sc-mirror-overlay-textarea"}`;
       (document.documentElement || document.body).appendChild(overlay);
       meta.overlay = overlay;
+      inputResizeObserver?.observe(input);
       input.addEventListener("scroll", () => {
         if (meta.overlay) {
           meta.overlay.scrollTop = input.scrollTop;
@@ -555,11 +607,20 @@
 
     const rect = input.getBoundingClientRect();
     const style = window.getComputedStyle(input);
-    if (style.display === "none" || style.visibility === "hidden" || rect.width === 0) {
+    const isHidden = style.display === "none" ||
+                     style.visibility === "hidden" ||
+                     style.opacity === "0" ||
+                     rect.width === 0 ||
+                     rect.height === 0 ||
+                     (style.position !== "fixed" && input.offsetParent === null);
+
+    if (isHidden) {
       meta.overlay.style.display = "none";
+      meta.overlay.textContent = "";
       activeOverlayInputs.delete(input);
       return;
     }
+
     const isSingleLineInput = input.tagName === "INPUT";
     meta.overlay.style.setProperty("display", isSingleLineInput ? "flex" : "block", "important");
     meta.overlay.style.setProperty("top", `${rect.top}px`, "important");
@@ -584,21 +645,31 @@
     [
       'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
       'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
-      'boxSizing', 'fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing', 'textAlign'
+      'boxSizing', 'fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing', 'textAlign',
+      'textIndent', 'textTransform', 'direction', 'wordBreak', 'overflowWrap', 'tabSize'
     ].forEach((prop) => {
-      meta.overlay.style[prop] = style[prop];
+      if (style[prop] !== undefined) meta.overlay.style[prop] = style[prop];
     });
+
+    if (!isSingleLineInput) {
+      const scrollbarWidth = input.offsetWidth - input.clientWidth - (parseFloat(style.borderLeftWidth) || 0) - (parseFloat(style.borderRightWidth) || 0);
+      if (scrollbarWidth > 0) {
+        meta.overlay.style.paddingRight = `${(parseFloat(style.paddingRight) || 0) + scrollbarWidth}px`;
+      }
+    }
 
     const val = input.value || "";
     meta.errors = meta.errors.filter(error => errorStillMatches(val, error));
 
     if (meta.errors.length === 0) {
       meta.overlay.textContent = "";
+      meta.overlay.style.display = "none";
       activeOverlayInputs.delete(input);
       return;
     }
 
     activeOverlayInputs.add(input);
+    inputResizeObserver?.observe(input);
 
     meta.overlay.textContent = "";
     let lastIndex = 0;
@@ -720,6 +791,11 @@
       }
       const meta = inputMetadata.get(el);
       if (!meta || meta.errors.length === 0) continue;
+
+      const style = window.getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden" || (style.position !== "fixed" && el.offsetParent === null)) {
+        continue;
+      }
 
       const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false);
       const errors = [...meta.errors].sort((a, b) => a.start - b.start || a.end - b.end);
@@ -1134,6 +1210,10 @@
 
   window.addEventListener("resize", onWindowScrollOrResize, { passive: true });
   window.addEventListener("scroll", onWindowScrollOrResize, { passive: true, capture: true });
+
+  ['mousedown', 'click', 'focusin', 'focusout', 'transitionend', 'animationend'].forEach((evt) => {
+    document.addEventListener(evt, scheduleOverlayCheck, { passive: true });
+  });
 
   document.addEventListener("keydown", () => { if (activeMenu) closeMenu(); });
   document.addEventListener("contextmenu", () => { if (activeMenu) closeMenu(); });
