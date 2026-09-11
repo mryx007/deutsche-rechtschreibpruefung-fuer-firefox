@@ -21,7 +21,7 @@ Ich habe daher ein Add-on gebaut, das genau das verbessert. Mir war es wichtig, 
 ## Funktionsweise
 
 Das Add-on arbeitet zweistufig:
-1. **Mathematischer Wörterbuch-Abgleich:** Falsch geschriebene Wörter werden blitzschnell mit einem kompakten DAFSA-Automaten über 2,7 Millionen Wortformen abgeglichen und im Vorschlags-Popup angezeigt. Das Add-on erkennt sowohl extrem lange, komplexe Zusammensetzungen (Komposita) als auch kurze Wörter.
+1. **Mathematischer Wörterbuch-Abgleich:** Falsch geschriebene Wörter werden blitzschnell mit einem kompakten DAFSA-Automaten über 2,8 Millionen Wortformen abgeglichen und im Vorschlags-Popup angezeigt. Das Add-on erkennt sowohl extrem lange, komplexe Zusammensetzungen (Komposita) als auch kurze Wörter.
 2. **Lokales BERT-Sprachmodell:** Wörter in Sätzen werden durch das lokale Sprachmodell überprüft. Es ist darauf trainiert, im Satzkontext die treffendste Vorhersage für das fehlerhafte Wort zu treffen (z. B. präzise Nomen- und Verbunterscheidung wie *„aus Versehen“* vs. *„sie wollen versehen“*).
 
 Natürlich klappt es nicht bei jedem einzelnen Wort – aber es gibt eine treffende Auswahl und zu über 98 % passt der beste Vorschlag.
@@ -84,11 +84,11 @@ $$W = P + F + S$$
 
 | Metrik | Ergebnis | Validierungsgrundlage |
 |---|---|---|
-| **Wortschatz-Abdeckung** | **2.696.775** | Deutsche Wortformen und Lemmata im kompakten DAFSA-Graphen |
+| **Wortschatz-Abdeckung** | **2.824.952** | Deutsche Wortformen und Lemmata im kompakten DAFSA-Graphen |
 | **Erkennungsrate** | **99,22 %** | Validiert gegen ein Korpus von 20.000 hochfrequenten Wörtern aus Nachrichtenquellen |
 | **Vorschlags-Trefferquote** | **98,73 %** | Reale Tippfehler-Szenarien mit passendem Begriff in den Top-Vorschlägen |
-| **Nomen-/Kontext-Regeltreue** | **100 % (80/80)** | Automatisierte Test-Suite für Nomen-Signale, Groß-/Kleinschreibung & RfdR § 57/§ 58 |
-| **Wörterbuchgröße (RAM)** | **6,4 MB** | Deterministischer azyklischer endlicher Zustandsautomat (DAFSA) |
+| **Nomen-/Kontext-Regeltreue** | **100 % (108/108)** | Automatisierte Test-Suite für Nomen-Signale, Groß-/Kleinschreibung & RfdR § 57/§ 58 |
+| **Wörterbuchgröße (RAM)** | **6,9 MB** | Deterministischer azyklischer endlicher Zustandsautomat (DAFSA) |
 | **Latenz pro Wortabgleich** | **< 1 ms** | $O(L)$-Suchzeit unabhängig von der Wörterbuchgröße |
 
 ---

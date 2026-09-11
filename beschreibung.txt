@@ -14,7 +14,7 @@ Es verzichtet vollständig auf externe Schnittstellen, Cloud-APIs oder Hintergru
 ### Benchmarks und Performanz-Kennzahlen:
 
 * 99,22 % Erkennungsrate auf realem deutschem Gegenwartswortschatz (validiert gegen ein Benchmark-Korpus von 20.000 hochfrequenten Wörtern aus Nachrichten- und Medienquellen).
-* 2.696.775 abgedeckte Wortformen und Lemmata.
+* 2.824.952 abgedeckte Wortformen und Lemmata.
 
 
 ### Warum beträgt die Downloadgröße ca. 120 MB?

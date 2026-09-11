@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Deutsche Rechtschreibprüfung (lokal)",
-  "version": "1.2",
+  "version": "1.2.1",
   "description": "Deutsche Rechtschreibprüfung (über 2,7 Mio. Wortformen)",
   "browser_specific_settings": {
     "gecko": {
