@@ -92,16 +92,19 @@ def extract_demorphy_words(zip_path):
                 if not w or len(w) < 2:
                     continue
                 w_lower = w.lower()
-                if w_lower in FUNCTION_WORDS or w.isupper():
+                if w_lower in FUNCTION_WORDS:
+                    if not w.isupper():
+                        w = w_lower
                     flag = 0
+                    entries[w] = 0
+                elif w.isupper():
+                    flag = 0
+                    entries[w] = entries.get(w, 0) | flag
                 elif w[0].isupper():
                     flag = WORD_FLAG_NOUN
+                    entries[w] = entries.get(w, 0) | flag
                 else:
                     flag = 0
-
-                if w_lower in FUNCTION_WORDS:
-                    entries[w] = 0
-                else:
                     entries[w] = entries.get(w, 0) | flag
                 words.add(w)
                 add_count += 1
