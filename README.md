@@ -166,10 +166,11 @@ node tests/test_sentences_suite.js
 
 ## Changelog
 
-### Version 1.2.3
+### Version 1.2.4
 - **Passendere Vorschläge:** Satzkontext und Ähnlichkeit zum geschriebenen Wort werden besser gewichtet.
 - **Groß-/Kleinschreibung:** Schreibweisen werden im Kontext bewertet; doppelte Varianten belegen keinen zusätzlichen Vorschlagsplatz.
 - **Sofortiges Popup:** Vorschläge werden im Hintergrund vorbereitet und beim Öffnen direkt angezeigt.
 - **Weniger Rechenarbeit:** Unveränderte Sätze und bereits berechnete Ergebnisse werden wiederverwendet.
 - **Zuverlässigere Unterstreichungen:** Markierungen bleiben beim Bearbeiten besser an der richtigen Stelle, auch über mehrere Absätze.
 - **Vollständigere Kontextprüfung:** Sie endet nicht mehr nach den ersten 16 passenden Wörtern.
+- **Fremdsprachen-Erkennung:** Fremdsprachige Sätze in mehrsprachigen Texten werden bei der Rechtschreibprüfung übersprungen.
