@@ -116,6 +116,18 @@ def extract_demorphy_words(zip_path):
             swiss = word.replace('ß', 'ss')
             entries[swiss] = entries.get(swiss, 0) | flags
 
+    # Separate Namensliste: vorhandene grammatische Merkmale nicht verändern.
+    names_path = os.path.join(os.path.dirname(__file__), 'additional_names.txt')
+    if os.path.exists(names_path):
+        with open(names_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                word = line.strip()
+                if not word or word.startswith('#'):
+                    continue
+                flag = WORD_FLAG_NOUN if word[0].isupper() and not word.isupper() else 0
+                entries.setdefault(word, flag)
+                words.add(word)
+
     print(f"Extrahiert in {time.perf_counter() - t0:.2f}s:")
     print(f"  - Eindeutige Wortformen: {len(words):,}")
     print(f"  - Eindeutige Lemmata:    {len(lemmas):,}")

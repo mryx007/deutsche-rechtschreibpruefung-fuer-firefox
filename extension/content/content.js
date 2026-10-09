@@ -32,6 +32,10 @@
         revision: 0,
         spellingRequest: 0,
         contextRequest: 0,
+        preparingSuggestions: false,
+        scanningContext: false,
+        contextSentences: new Map(),
+        contextGeneration: 0,
         isComposing: false,
         detachedSince: 0,
         renderedOverlayKey: "",
@@ -237,7 +241,16 @@
         }
         if (changes.sc_user_dict || changes.sc_ignored_words) {
           document.querySelectorAll("textarea, input, [contenteditable='true'], [contenteditable=''], .ProseMirror, [role='textbox']").forEach((el) => {
-            if (isTextInput(el) || el.isContentEditable) scheduleScan(el);
+            if (isTextInput(el) || el.isContentEditable) {
+              const meta = inputMetadata.get(el);
+              if (meta) {
+                meta.revision++;
+                meta.contextSentences?.clear();
+                meta.contextGeneration = (meta.contextGeneration || 0) + 1;
+                for (const error of meta.errors) delete error.preparedContext;
+              }
+              scheduleScan(el);
+            }
           });
         }
       }
@@ -468,9 +481,9 @@
     return (newSug) => { if (activeMenu === menu) renderItems(newSug); };
   }
 
-  // Gemeinsamer Öffnungs- und Nachlade-Workflow für alle Feldtypen
+  // Sofortiges Öffnen mit den bereits vorbereiteten Vorschlägen.
   async function openSuggestionMenu(targetRect, error, context, meta, onSelect, onIgnore, ownerField) {
-    const { word, start, end, isFirstWord = false } = error;
+    const { word, start, end } = error;
     const menuKey = `${meta.fieldId}:${start}:${end}:${word}`;
     if (activeMenu && activeMenuKey === menuKey) {
       return; // Bereits für dieses Wort geöffnet - kein Schließen, Neuaufbau oder Zucken!
@@ -482,31 +495,11 @@
     activeMenuKey = menuKey;
     activeMenuField = ownerField;
 
-    let suggestions = Array.isArray(error.quickSuggestions) && error.quickSuggestions.length > 0
+    // Never wait for inference here or reorder a visible menu. A click before
+    // preparation finishes uses the fast dictionary fallback.
+    const suggestions = Array.isArray(error.quickSuggestions) && error.quickSuggestions.length > 0
       ? [...error.quickSuggestions]
       : (error.suggestion ? [error.suggestion] : []);
-
-    try {
-      const fetchPromise = browser.runtime.sendMessage({
-        action: "get_suggestions",
-        word,
-        context,
-        isFirstWord,
-        start,
-        end
-      });
-      const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 250));
-      const res = await Promise.race([fetchPromise, timeoutPromise]);
-      const incoming = (res?.suggestions || []).map(s => typeof s === "string" ? s : (s?.word || "")).filter(Boolean);
-      if (incoming.length > 0) {
-        suggestions = incoming;
-        error.quickSuggestions = incoming;
-        error.suggestion = incoming[0];
-      }
-    } catch {}
-
-    // Wurde während der Abfrage weggeklickt oder ein anderes Wort geöffnet?
-    if (activeMenuKey !== menuKey) return;
 
     showMenu(targetRect, word, suggestions, onSelect, onIgnore, ownerField);
     activeMenuKey = menuKey;
@@ -541,17 +534,41 @@
   }) : null;
 
   function readFieldText(el) {
-    return (isTextInput(el) ? el.value : el.textContent) || "";
+    return (isTextInput(el) ? el.value : buildTextIndex(el).text) || "";
   }
 
   function invalidateFieldText(el, meta, text) {
     if (text === meta.lastText) return false;
+    const previous = meta.lastText || "";
+    let prefix = 0;
+    while (prefix < previous.length && prefix < text.length && previous[prefix] === text[prefix]) prefix++;
+    let suffix = 0;
+    while (suffix < previous.length - prefix && suffix < text.length - prefix &&
+           previous[previous.length - 1 - suffix] === text[text.length - 1 - suffix]) suffix++;
+    const oldEnd = previous.length - suffix;
+    const delta = text.length - previous.length;
+    // Keep only words outside the changed interval and verify their boundaries.
+    // Multiple DOM edits inside that interval are discarded together.
+    const sentences = meta.errors.some(error => error.kind === "context") ? getContextSentences(text) : [];
+    meta.errors = meta.errors.flatMap(error => {
+      let updated;
+      if (error.end <= prefix) updated = { ...error };
+      else if (error.start >= oldEnd) updated = { ...error, start: error.start + delta, end: error.end + delta };
+      else return [];
+      if (!errorStillMatches(text, updated)) return [];
+      if (error.kind === "context") {
+        const sentence = sentences.find(item => updated.start >= item.start && updated.end <= item.end);
+        return sentence?.text === error.contextText ? [updated] : [];
+      }
+      if (updated.preparedContext !== suggestionContextKey(text, updated)) {
+        delete updated.preparedContext;
+        updated.quickSuggestions = updated.fallbackSuggestions || [];
+        updated.suggestion = updated.quickSuggestions[0] || "";
+      }
+      return [updated];
+    });
     meta.revision++;
     meta.lastText = text;
-    // Keine alten Offsets verschieben: Rich-Text-Editoren können in einem
-    // Schritt mehrere Knoten ersetzen. Bis zum schnellen Neuscan ist eine
-    // fehlende Linie korrekt, eine Linie am falschen Wort dagegen nicht.
-    meta.errors = [];
     if (isTextInput(el)) syncOverlay(el, meta);
     else rebuildHighlights();
     return true;
@@ -835,16 +852,27 @@
   function buildTextIndex(root) {
     const segments = [];
     const chunks = [];
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
     let offset = 0;
-    let node;
-    while ((node = walker.nextNode())) {
-      const text = node.textContent || "";
-      if (!text.length) continue;
-      segments.push({ node, start: offset, end: offset + text.length });
-      chunks.push(text);
-      offset += text.length;
-    }
+    const newline = () => {
+      if (offset && !chunks[chunks.length - 1].endsWith("\n")) { chunks.push("\n"); offset++; }
+    };
+    const visit = node => {
+      if (node.nodeType === 3) {
+        const text = node.textContent || "";
+        if (text.length) {
+          segments.push({ node, start: offset, end: offset + text.length });
+          chunks.push(text);
+          offset += text.length;
+        }
+        return;
+      }
+      if (node.tagName === "BR") { chunks.push("\n"); offset++; return; }
+      const block = node !== root && /^(?:DIV|P|LI|UL|OL|BLOCKQUOTE|PRE|H[1-6]|TR)$/.test(node.tagName || "");
+      if (block) newline();
+      for (const child of node.childNodes || []) visit(child);
+      if (block) newline();
+    };
+    visit(root);
     return { text: chunks.join(""), segments, length: offset };
   }
 
@@ -1073,6 +1101,43 @@
     else updateContentEditableHighlights(el, meta);
   }
 
+  function suggestionContextKey(text, error) {
+    let start = error.start;
+    let end = error.end;
+    while (start > 0 && error.start - start < 280 && !/[.!?…\r\n]/u.test(text[start - 1])) start--;
+    while (end < text.length && end - error.end < 280 && !/[.!?…\r\n]/u.test(text[end])) end++;
+    if (end < text.length && /[.!?…\r\n]/u.test(text[end])) end++;
+    return JSON.stringify([text.slice(start, end), error.start - start, error.end - start, error.isFirstWord || false]);
+  }
+
+  async function prepareFieldSuggestions(el, meta) {
+    if (meta.preparingSuggestions) return;
+    meta.preparingSuggestions = true;
+    try {
+      while (el.isConnected && !meta.isComposing) {
+        const text = readFieldText(el);
+        const caret = getFieldCaretOffset(el, text.length);
+        const error = meta.errors.filter(item => item.kind !== "context" && item.preparedContext !== suggestionContextKey(text, item))
+          .sort((a, b) => Math.abs(a.end - caret) - Math.abs(b.end - caret))[0];
+        if (!error) break;
+        const key = suggestionContextKey(text, error);
+        const revision = meta.revision;
+        const res = await browser.runtime.sendMessage({ action: "get_suggestions", word: error.word,
+          context: text, start: error.start, end: error.end, isFirstWord: error.isFirstWord });
+        if (meta.revision !== revision || readFieldText(el) !== text) continue;
+        const current = meta.errors.find(item => sameError(item, error));
+        if (!current) continue;
+        current.preparedContext = key;
+        if (res?.suggestions?.length) {
+          current.quickSuggestions = res.suggestions;
+          current.suggestion = res.suggestions[0];
+        }
+      }
+    } catch {} finally {
+      meta.preparingSuggestions = false;
+    }
+  }
+
   async function scanField(el) {
     if (!el?.isConnected) return;
     const meta = getInputMeta(el);
@@ -1098,6 +1163,11 @@
       const preservedContextErrors = meta.errors.filter(error =>
         error.kind === "context" && !occupied.has(error.start) && errorStillMatches(text, error)
       );
+      for (const error of spellingErrors) {
+        error.fallbackSuggestions = error.quickSuggestions;
+        const previous = meta.errors.find(item => sameError(item, error) && item.preparedContext === suggestionContextKey(text, item));
+        if (previous) Object.assign(error, { preparedContext: previous.preparedContext, quickSuggestions: previous.quickSuggestions, suggestion: previous.suggestion });
+      }
       meta.errors = [...spellingErrors, ...preservedContextErrors].sort((a, b) => a.start - b.start);
       meta.lastText = text;
     } catch {
@@ -1105,33 +1175,67 @@
     }
 
     renderField(el, meta);
+    void prepareFieldSuggestions(el, meta);
   }
 
   async function scanContextField(el) {
     if (!el?.isConnected) return;
     const meta = getInputMeta(el);
-    const text = readFieldText(el);
-    const revision = meta.revision;
-    const request = ++meta.contextRequest;
-    if (!text.trim() || text.length < 3) return;
-
+    if (meta.scanningContext) return;
+    meta.scanningContext = true;
+    if (!meta.contextSentences) meta.contextSentences = new Map();
     try {
-      const res = await browser.runtime.sendMessage({ action: "check_context", text });
-      if (!el.isConnected || meta.revision !== revision ||
-          meta.contextRequest !== request || readFieldText(el) !== text) return;
-
-      const spellingErrors = meta.errors.filter(error => error.kind !== "context");
-      const occupied = new Set(spellingErrors.map(error => error.start));
-      const contextErrors = (res?.errors || []).filter(error =>
-        !occupied.has(error.start) && errorStillMatches(text, error)
-      );
-      meta.errors = [...spellingErrors, ...contextErrors].sort((a, b) => a.start - b.start);
-      meta.lastText = text;
+      while (el.isConnected && !meta.isComposing) {
+        const text = readFieldText(el);
+        const sentences = getContextSentences(text);
+        if (meta.contextSentences.size > Math.max(200, sentences.length)) {
+          const currentTexts = new Set(sentences.map(item => item.text));
+          for (const key of meta.contextSentences.keys()) if (!currentTexts.has(key)) meta.contextSentences.delete(key);
+        }
+        const caret = getFieldCaretOffset(el, text.length);
+        const sentence = sentences.filter(item => !meta.contextSentences.has(item.text))
+          .sort((a, b) => sentenceDistance(a, caret) - sentenceDistance(b, caret))[0];
+        if (sentence) {
+          const revision = meta.revision;
+          const generation = meta.contextGeneration;
+          const res = await browser.runtime.sendMessage({ action: "check_context", text: sentence.text });
+          if (!Array.isArray(res?.errors)) break;
+          if (meta.contextGeneration !== generation) continue;
+          meta.contextSentences.set(sentence.text, res.errors);
+          if (!el.isConnected || meta.revision !== revision || readFieldText(el) !== text) continue;
+        }
+        const spellingErrors = meta.errors.filter(error => error.kind !== "context");
+        const occupied = new Set(spellingErrors.map(error => error.start));
+        const contextErrors = sentences.flatMap(item => (meta.contextSentences.get(item.text) || []).map(error => ({
+          ...error, start: error.start + item.start, end: error.end + item.start, contextText: item.text
+        }))).filter(error => !occupied.has(error.start) && errorStillMatches(text, error));
+        meta.errors = [...spellingErrors, ...contextErrors].sort((a, b) => a.start - b.start);
+        renderField(el, meta);
+        if (!sentence) break;
+      }
     } catch {
-      return;
+      // Retry failed sentences on the next scheduled scan.
+    } finally {
+      meta.scanningContext = false;
     }
+  }
 
-    renderField(el, meta);
+  function getContextSentences(text) {
+    return Array.from(text.matchAll(/[^.!?…\r\n]+(?:[.!?…]+|[\r\n]+|$)/gu), match => ({
+      text: match[0], start: match.index, end: match.index + match[0].length
+    })).filter(item => /\p{L}/u.test(item.text));
+  }
+
+  function sentenceDistance(sentence, caret) {
+    return caret < sentence.start ? sentence.start - caret : Math.max(0, caret - sentence.end);
+  }
+
+  function getFieldCaretOffset(el, fallback) {
+    if (isTextInput(el)) return Number.isInteger(el.selectionStart) ? el.selectionStart : fallback;
+    const selection = window.getSelection();
+    if (!selection?.anchorNode || !el.contains(selection.anchorNode)) return fallback;
+    const offset = getTextOffset(buildTextIndex(el), selection.anchorNode, selection.anchorOffset);
+    return offset >= 0 ? offset : fallback;
   }
 
   function scheduleScan(target, delay = 120) {

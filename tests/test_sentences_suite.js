@@ -20,6 +20,8 @@ globalThis.__testExports = {
   MLMContextScorer,
   normalizeLookupWord,
   detectNounSignal,
+  findContextErrors,
+  tokenize,
   GERMAN_NOUN_SIGNAL_WORDS
 };
 `;
@@ -47,6 +49,8 @@ const {
   SpellCheckEngine,
   MLMContextScorer,
   detectNounSignal,
+  findContextErrors,
+  tokenize,
   GERMAN_NOUN_SIGNAL_WORDS
 } = ctx.__testExports;
 
@@ -373,22 +377,29 @@ async function runSuggestionTests() {
 // ----------------------------------------------------------------------------
 // TEST-BLOCK 3: MLM-Rebalancing & Distanz-Ankerung
 // ----------------------------------------------------------------------------
-function runMlmWeightTests() {
-  console.log("\n--- BLOCK 3: MLM-Rebalancing (Tippfehler vs. Sprachmodell) ---");
-
-  // Gewicht: 0.30 * lmProb + 0.70 * editScore
-  const candVersehen = { word: "Versehen", editScore: 0.95, fromUserDict: false };
-  const candVersen = { word: "Versen", editScore: 0.65, fromUserDict: false };
-
-  // Mit altem Gewicht (0.72 LM + 0.28 Edit):
-  const oldScoreVersehen = 0.72 * 0.15 + 0.28 * 0.95; // 0.374
-  const oldScoreVersen = 0.72 * 0.85 + 0.28 * 0.65;   // 0.794 -> Versen gewann fehlerhaft
-  assert(oldScoreVersen > oldScoreVersehen, "Altes Modell bevorzugte fälschlicherweise 'Versen' vor 'Versehen'");
-
-  // Mit neuem balancierten Gewicht (0.30 LM + 0.70 Edit):
-  const newScoreVersehen = 0.30 * 0.15 + 0.70 * 0.95; // 0.710
-  const newScoreVersen = 0.30 * 0.85 + 0.70 * 0.65;   // 0.710
-  assert(newScoreVersehen >= newScoreVersen, "Neues Modell verhindert Übersteuerung durch rohe LM-Wahrscheinlichkeit");
+async function runMlmWeightTests() {
+  console.log("\n--- BLOCK 3: Ranking mit aufgezeichneten echten Modellwerten ---");
+  const scorer = new MLMContextScorer(null, {});
+  // Captured in Firefox for "Die Kinder lernn heute."; exercising the actual
+  // scorer rather than repeating its arithmetic in the test.
+  const recorded = { lern: -15.2794, lernen: -6.7420, Lernen: -14.3221, leben: -2.8542, Auto: -20 };
+  scorer.getContextLogScores = async (word, context, words) => words.map(word => ({word,logScore:recorded[word]}));
+  const candidates = [
+    {word:"lern",editScore:0.70876,logPosterior:-1.23275},
+    {word:"lernen",editScore:0.58459,logPosterior:-2.13183},
+    {word:"Lernen",editScore:0.56266,logPosterior:-2.33183},
+    {word:"leben",editScore:0.38109,logPosterior:-4.87211}
+  ];
+  const ranked = await scorer.scoreCandidates("lernn", "Die Kinder lernn heute.", candidates);
+  assert(ranked[0].word === "lernen", "Tippfehlernähe und Satzkontext bevorzugen lernen statt leben oder lern");
+  assert(ranked.filter(item => item.word.toLowerCase() === "lernen").length === 1,
+    "Groß-/Kleinvarianten belegen nach ihrer Bewertung nur einen Menüplatz");
+  const extended = await scorer.scoreCandidates("lernn", "Die Kinder lernn heute.",
+    [...candidates, {word:"Auto",editScore:0.1,logPosterior:-27}]);
+  assert(extended[0].word === "lernen", "Ein zusätzlicher ferner Kandidat ändert die beste Wortwahl nicht");
+  scorer.getContextLogScores = async (word, context, words) => words.map(word => ({word,logScore:-Infinity}));
+  const fallback = await scorer.scoreCandidates("lernn", "Die Kinder lernn heute.", candidates);
+  assert(fallback[0].word === "lern", "Ohne gültige Modellwerte bleibt die Wörterbuchreihenfolge erhalten");
 }
 
 // ----------------------------------------------------------------------------
@@ -408,12 +419,20 @@ const regressionTests = [
   { word: "Apfel", isCorrect: true },
   { word: "apfel", isCorrect: false }, // Reines deutsches Nomen kleingeschrieben ist falsch
   { word: "Computer", isCorrect: true },
+  { word: "Siri", isCorrect: true },
   { word: "Überraschung", isCorrect: true },
   { word: "Ueberraschung", expected: "Überraschung" }
 ];
 
 function runRegressionTests() {
   console.log("\n--- BLOCK 4: Allgemeine Rechtschreib- & Casing-Regressionen ---");
+  const siriSentence = "Auch hier könnte Siri AI zu den wesentlichen Neuerungen gehören, während das Gehäuse voraussichtlich unverändert bleibt.";
+  const siriToken = tokenize(siriSentence).find(token => token.word === "Siri");
+  assert(siriToken && engine.isCorrect(siriToken.word, false, true),
+    "Siri wird im gemeldeten Satz als gültiger Name erkannt");
+  const caseVariants = engine.collectCandidates("guttes", false, 16, true, true).map(c => c.word);
+  assert(caseVariants.includes("gutes") && caseVariants.includes("Gutes"),
+    "MLM bekommt sowohl Adjektiv- als auch Nomen-Schreibweise zur Bewertung");
   for (const rt of regressionTests) {
     if (rt.isCorrect !== undefined) {
       const ok = engine.isCorrect(rt.word, false, true);
@@ -427,6 +446,23 @@ function runRegressionTests() {
 }
 
 // ----------------------------------------------------------------------------
+// Context coverage must not stop after the first 16 matching words.
+async function runContextCoverageTest() {
+  const text = "Das ist gut. ".repeat(17) + "Ihr seit hier.";
+  const originalScorer = engine.mlmScorer;
+  engine.mlmScorer = {
+    async getContextLogScores(word, context, candidates) {
+      return candidates.map(candidate => ({ word: candidate, logScore:
+        context.includes("Ihr seit") ? (candidate === "seid" ? 0 : -5) : (candidate === word ? 0 : -5) }));
+    }
+  };
+  try {
+    const errors = await findContextErrors(engine, text, tokenize(text), [], true);
+    assert(errors.some(error => error.word === "seit" && error.start === text.indexOf("seit")),
+      "Kontextfehler nach mehr als 16 passenden Wörtern werden ebenfalls geprüft");
+  } finally { engine.mlmScorer = originalScorer; }
+}
+
 // Hauptfunktion
 // ----------------------------------------------------------------------------
 async function main() {
@@ -437,8 +473,9 @@ async function main() {
 
   runSignalTests();
   await runSuggestionTests();
-  runMlmWeightTests();
+  await runMlmWeightTests();
   runRegressionTests();
+  await runContextCoverageTest();
 
   const durationMs = Date.now() - startTime;
   console.log("\n======================================================================");

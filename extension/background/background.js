@@ -457,17 +457,38 @@ class MLMContextScorer {
     const contextScores = await this.getContextLogScores(
       word, context, candidates.map(candidate => candidate.word), occurrenceStart, occurrenceEnd
     );
-    const finiteScores = contextScores.map(item => item.logScore).filter(Number.isFinite);
-    const maxScore = finiteScores.length ? Math.max(...finiteScores) : 0;
-    const weights = contextScores.map(item => Number.isFinite(item.logScore) ? Math.exp(item.logScore - maxScore) : 0);
-    const weightSum = weights.reduce((sum, value) => sum + value, 0) || 1;
-
-    return candidates.map((c, index) => {
-      const lmProb = weights[index] / weightSum;
+    if (!contextScores.some(item => Number.isFinite(item.logScore))) return candidates;
+    const finite = contextScores.map(item => item.logScore).filter(Number.isFinite);
+    const maxLog = Math.max(...finite);
+    const weights = contextScores.map(item => Number.isFinite(item.logScore) ? Math.exp(item.logScore - maxLog) : 0);
+    const totalWeight = weights.reduce((sum, value) => sum + value, 0) || 1;
+    // Rank lexical alternatives separately from their surface case. Preserve the
+    // established case decision, which also accounts for the input spelling.
+    const spellingScores = new Map();
+    for (const c of candidates) {
+      const key = c.word.toLocaleLowerCase("de-DE");
+      const base = c.logPosterior ?? (-3 * Math.max(0.1, 1 / c.editScore - 1));
+      spellingScores.set(key, Math.max(spellingScores.get(key) ?? -Infinity, base));
+    }
+    // Combine evidence in log space. Candidate-set softmax used to let a common
+    // but less similar word overwhelm the typo evidence, and hardly penalized
+    // grammatically implausible candidates once their softmax approached zero.
+    const families = new Map();
+    candidates.forEach((c, index) => {
+      const key = c.word.toLocaleLowerCase("de-DE");
+      const lmLogScore = contextScores[index]?.logScore ?? -Infinity;
+      const spellingLogScore = spellingScores.get(key);
       const userBonus = c.fromUserDict ? 0.35 : 0.0;
-      const score = 0.30 * lmProb + 0.70 * c.editScore + userBonus;
-      return { word: c.word, score, confidence: Math.round(Math.min(0.99, score) * 100) };
-    }).sort((a, b) => b.score - a.score);
+      const score = spellingLogScore + 0.35 * lmLogScore + userBonus;
+      const caseScore = 0.30 * weights[index] / totalWeight + 0.70 * c.editScore + userBonus;
+      const family = families.get(key);
+      if (!family) families.set(key, { word: c.word, score, caseScore, confidence: c.confidence });
+      else {
+        family.score = Math.max(family.score, score);
+        if (caseScore > family.caseScore) Object.assign(family, { word: c.word, caseScore, confidence: c.confidence });
+      }
+    });
+    return [...families.values()].sort((a, b) => b.score - a.score);
   }
 }
 
@@ -903,6 +924,9 @@ class SpellCheckEngine {
     this.commonTypos = commonTypoData?.corrections || Object.create(null);
     this.cache = new Map();
     this.compoundCorrectionCache = new Map();
+    this.suggestionCache = new Map();
+    this.pendingSuggestions = new Map();
+    this.suggestionGeneration = 0;
     this.MAX_CACHE = 3000;
   }
 
@@ -1274,7 +1298,7 @@ class SpellCheckEngine {
     return gapFiltered.slice(0, maxResults);
   }
 
-  collectCandidates(word, isFirstWord = false, limit = 5, isNounSignal = false) {
+  collectCandidates(word, isFirstWord = false, limit = 5, isNounSignal = false, preserveCaseVariants = false) {
     word = normalizeLookupWord(word);
     const map = new Map();
     const userDictCandidates = new Set();
@@ -1580,7 +1604,7 @@ class SpellCheckEngine {
       let finalWord = cand;
       if (isAllCaps) {
         finalWord = cand.toUpperCase();
-      } else if (isFirstWord || candMustCap) {
+      } else if (isFirstWord || (candMustCap && !preserveCaseVariants)) {
         finalWord = cand[0].toUpperCase() + cand.slice(1);
       }
 
@@ -1610,7 +1634,7 @@ class SpellCheckEngine {
       if (hasStrongPrefix && item.prefixMatch < 2 && result.length >= 3) continue;
       const currentLogGap = (word.length >= 16 && result.length >= 1) ? 0.95 : logGap;
       if (result.length >= (word.length >= 16 ? 1 : 5) && bestLog - item.logPosterior > currentLogGap) break;
-      const lower = item.word.toLowerCase();
+      const lower = preserveCaseVariants ? item.word : item.word.toLowerCase();
       if (!seenLower.has(lower)) {
         seenLower.add(lower);
         result.push(item);
@@ -1622,10 +1646,33 @@ class SpellCheckEngine {
 
   async getSuggestions(word, context = "", isFirstWord = false, checkCase = true, start = -1, end = -1) {
     if (this.isCorrect(word, isFirstWord, checkCase)) return [];
+    const local = getLocalContext(context, { start, end });
+    if (start >= 0 && end > start) {
+      context = local.text;
+      start = local.start;
+      end = local.end;
+    }
+    const generation = this.suggestionGeneration;
+    const key = JSON.stringify([generation, word, context, isFirstWord, checkCase, start, end]);
+    if (this.suggestionCache.has(key)) return this.suggestionCache.get(key);
+    if (this.pendingSuggestions.has(key)) return this.pendingSuggestions.get(key);
+    const task = this.computeSuggestions(word, context, isFirstWord, checkCase, start, end);
+    this.pendingSuggestions.set(key, task);
+    try {
+      const result = await task;
+      if (this.suggestionCache.size >= 200) this.suggestionCache.delete(this.suggestionCache.keys().next().value);
+      if (this.suggestionGeneration === generation) this.suggestionCache.set(key, result);
+      return result;
+    } finally {
+      this.pendingSuggestions.delete(key);
+    }
+  }
+
+  async computeSuggestions(word, context, isFirstWord, checkCase, start, end) {
     const occurrence = this.mlmScorer?.findOccurrence(context, word, start, end);
     const occStart = occurrence ? occurrence.start : (start >= 0 ? start : context.toLocaleLowerCase("de-DE").indexOf(word.toLocaleLowerCase("de-DE")));
     const isNounSignal = detectNounSignal(context, occStart);
-    const candidates = this.collectCandidates(word, isFirstWord, 10, isNounSignal);
+    const candidates = this.collectCandidates(word, isFirstWord, this.mlmScorer ? 16 : 10, isNounSignal, Boolean(this.mlmScorer));
     if (!candidates.length) return [];
 
     const surroundingContext = occurrence
@@ -1775,7 +1822,6 @@ for (const group of CONTEXT_CONFUSION_GROUPS) {
   for (const word of group) CONTEXT_GROUP_BY_WORD.set(word.toLocaleLowerCase("de-DE"), group);
 }
 const CONTEXT_ERROR_MARGIN = 1.75;
-const MAX_CONTEXT_CHECKS_PER_TEXT = 16;
 
 function getContextConfusionGroup(engine, word) {
   const key = normalizeLookupWord(word).toLocaleLowerCase("de-DE");
@@ -1840,7 +1886,7 @@ async function findContextErrors(engine, text, tokens, existingErrors, checkCase
     Boolean(getContextConfusionGroup(engine, token.word)) &&
     engine.isCorrect(token.word, token.isFirstWord, checkCase) &&
     !isExplicitlyAccepted(engine, token.word, checkCase)
-  ).slice(0, MAX_CONTEXT_CHECKS_PER_TEXT);
+  );
 
   const errors = [];
   for (const token of candidates) {
@@ -1909,6 +1955,8 @@ if (typeof browser !== "undefined" && browser.storage?.local) {
           if (engine) {
             engine.userDictionary = userDictionary;
             engine.cache.clear();
+            engine.suggestionCache.clear();
+            engine.suggestionGeneration++;
           }
         }
       }
@@ -1918,6 +1966,8 @@ if (typeof browser !== "undefined" && browser.storage?.local) {
           if (engine) {
             engine.ignoredWords = ignoredWords;
             engine.cache.clear();
+            engine.suggestionCache.clear();
+            engine.suggestionGeneration++;
           }
         }
       }
@@ -1997,6 +2047,8 @@ browser.runtime.onMessage.addListener((req, sender, sendResponse) => {
           if (engine) {
             engine.userDictionary = userDictionary;
             engine.cache.clear();
+            engine.suggestionCache.clear();
+            engine.suggestionGeneration++;
           }
           await saveUserDictionary();
         }
@@ -2017,6 +2069,8 @@ browser.runtime.onMessage.addListener((req, sender, sendResponse) => {
           if (engine) {
             engine.userDictionary = userDictionary;
             engine.cache.clear();
+            engine.suggestionCache.clear();
+            engine.suggestionGeneration++;
           }
           await saveUserDictionary();
         }
@@ -2042,6 +2096,8 @@ browser.runtime.onMessage.addListener((req, sender, sendResponse) => {
           if (engine) {
             engine.ignoredWords = ignoredWords;
             engine.cache.clear();
+            engine.suggestionCache.clear();
+            engine.suggestionGeneration++;
           }
           await saveIgnoredWords();
         }
@@ -2062,6 +2118,8 @@ browser.runtime.onMessage.addListener((req, sender, sendResponse) => {
           if (engine) {
             engine.ignoredWords = ignoredWords;
             engine.cache.clear();
+            engine.suggestionCache.clear();
+            engine.suggestionGeneration++;
           }
           await saveIgnoredWords();
         }

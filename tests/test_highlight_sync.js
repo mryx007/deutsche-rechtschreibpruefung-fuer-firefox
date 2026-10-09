@@ -69,7 +69,7 @@ async function main() {
   const first = { nodeType: 3, textContent: "ver" };
   const middle = { nodeType: 3, textContent: "st" };
   const last = { nodeType: 3, textContent: "ee" };
-  const root = { nodes: [first, middle, last] };
+  const root = { childNodes: [first, middle, last] };
   const index = buildTextIndex(root);
 
   assert.strictEqual(index.text, "verstee", "split text nodes form one canonical field string");
@@ -89,6 +89,16 @@ async function main() {
   assert.strictEqual(staticRange.startOffset, 2);
   assert.strictEqual(staticRange.endContainer, last);
   assert.strictEqual(staticRange.endOffset, 1);
+
+  const paragraphs = { childNodes: [
+    { tagName: "P", childNodes: [{ nodeType: 3, textContent: "Hallo" }] },
+    { tagName: "P", childNodes: [{ nodeType: 3, textContent: "verstee" }] }
+  ] };
+  const paragraphIndex = buildTextIndex(paragraphs);
+  assert.strictEqual(paragraphIndex.text, "Hallo\nverstee\n", "paragraphs remain separate words");
+  assert.strictEqual(getRangeForOffsets(paragraphs, 6, 13, paragraphIndex).endOffset, 7);
+  assert.strictEqual(buildTextIndex({ childNodes: [first, { tagName: "BR" }, last] }).text,
+    "ver\nee", "explicit line breaks remain word boundaries");
 
   const isTextInput = compile("isTextInput");
   assert.strictEqual(isTextInput({ tagName: "INPUT", type: "search", disabled: false, readOnly: false }), true,
@@ -162,6 +172,9 @@ async function main() {
   let inputRenders = 0;
   let editableRenders = 0;
   const invalidateFieldText = compile("invalidateFieldText", {
+    getContextSentences: compile("getContextSentences"),
+    errorStillMatches,
+    suggestionContextKey: compile("suggestionContextKey"),
     isTextInput: el => el.kind === "input",
     syncOverlay: () => { inputRenders++; },
     rebuildHighlights: () => { editableRenders++; }
@@ -175,6 +188,14 @@ async function main() {
     "unchanged value does not redraw");
   invalidateFieldText({ kind: "editable" }, { revision: 0, lastText: "a", errors: [1] }, "b");
   assert.strictEqual(editableRenders, 1);
+
+  const retained = { revision: 0, lastText: "verstee gut", errors: [{ word: "verstee", start: 0, end: 7 }] };
+  invalidateFieldText({ kind: "input" }, retained, "verstee gutes Buch");
+  assert.strictEqual(retained.errors.length, 1, "editing another word preserves the underline");
+  invalidateFieldText({ kind: "input" }, retained, "ein verstee gutes Buch");
+  assert.strictEqual(retained.errors[0].start, 4, "an intact suffix keeps its exact text offset after insertion");
+  invalidateFieldText({ kind: "input" }, retained, "ein versteeX gutes Buch");
+  assert.strictEqual(retained.errors.length, 0, "extending the marked word invalidates that underline");
 
   const pending = [];
   const browser = {
@@ -195,6 +216,9 @@ async function main() {
   };
   const field = { isConnected: true, value: "verstee" };
   const scanField = compile("scanField", {
+    suggestionContextKey: compile("suggestionContextKey"),
+    sameError: compile("sameError"),
+    prepareFieldSuggestions: () => {},
     getInputMeta: () => asyncMeta,
     readFieldText: el => el.value,
     browser,
@@ -223,6 +247,61 @@ async function main() {
   await olderSameTextScan;
   assert.strictEqual(asyncMeta.errors.length, 1, "older same-text request cannot overwrite the newest result");
   assert.strictEqual(rendered, 1);
+
+  const suggestionContextKey = compile("suggestionContextKey");
+  const suggestionRequests = [];
+  const preparedMeta = { revision: 0, errors: [{ word: "guttes", start: 12, end: 18, kind: "spelling" }] };
+  const preparedField = { isConnected: true, value: "Das ist ein guttes Buch." };
+  const prepareFieldSuggestions = compile("prepareFieldSuggestions", {
+    getFieldCaretOffset: (el, fallback) => el.selectionStart ?? fallback,
+    readFieldText: el => el.value, suggestionContextKey, sameError: compile("sameError"),
+    browser: {runtime:{sendMessage(req) { const item = deferred(); suggestionRequests.push({req,...item}); return item.promise; }}}
+  });
+  const preparation = prepareFieldSuggestions(preparedField, preparedMeta);
+  preparedField.value = "Das ist ein guttes Bild.";
+  preparedMeta.revision++;
+  suggestionRequests[0].resolve({ suggestions: ["STALE"] });
+  await Promise.resolve();
+  assert.strictEqual(suggestionRequests.length, 2, "a changed sentence gets a fresh preparation");
+  suggestionRequests[1].resolve({ suggestions: ["gutes"] });
+  await preparation;
+  assert.deepStrictEqual(preparedMeta.errors[0].quickSuggestions, ["gutes"], "a stale model response cannot become the popup result");
+  assert.strictEqual(preparedMeta.errors[0].preparedContext, suggestionContextKey(preparedField.value, preparedMeta.errors[0]));
+
+  const priorityMeta = { revision: 0, errors: [
+    { word: "verstee", start: 0, end: 7, kind: "spelling" },
+    { word: "guttes", start: 12, end: 18, kind: "spelling" }
+  ] };
+  const priorityField = { isConnected: true, value: "verstee ein guttes Buch", selectionStart: 18 };
+  const prioritized = prepareFieldSuggestions(priorityField, priorityMeta);
+  assert.strictEqual(suggestionRequests[2].req.word, "guttes", "preparation starts at the cursor rather than the text beginning");
+  priorityField.isConnected = false;
+  suggestionRequests[2].resolve({ suggestions: ["gutes"] });
+  await prioritized;
+
+  const contextMeta = { revision: 0, errors: [], contextSentences: new Map() };
+  const contextField = { isConnected: true, value: "Das ist gut. Du seit hier.", selectionStart: 25 };
+  const checkedSentences = [];
+  const scanContextField = compile("scanContextField", {
+    getInputMeta: () => contextMeta, readFieldText: el => el.value,
+    getContextSentences: compile("getContextSentences"), sentenceDistance: compile("sentenceDistance"),
+    getFieldCaretOffset: el => el.selectionStart, errorStillMatches, renderField: () => {},
+    browser: {runtime:{sendMessage: async req => {
+      checkedSentences.push(req.text);
+      const start = req.text.indexOf("seit");
+      return {errors: start < 0 ? [] : [{word:"seit",start,end:start+4,kind:"context",suggestion:"seid"}]};
+    }}}
+  });
+  await scanContextField(contextField);
+  assert.deepStrictEqual(checkedSentences, [" Du seit hier.", "Das ist gut."], "context checking starts in the current sentence");
+  assert.strictEqual(contextMeta.errors[0].start, 16, "sentence-local context errors map back to field offsets");
+  await scanContextField(contextField);
+  assert.strictEqual(checkedSentences.length, 2, "unchanged sentences require no repeated context requests");
+  contextField.value = "Das ist wirklich gut. Du seit hier.";
+  contextMeta.revision++;
+  await scanContextField(contextField);
+  assert.deepStrictEqual(checkedSentences.slice(2), ["Das ist wirklich gut."], "only the changed sentence is checked again");
+  assert.strictEqual(contextMeta.errors[0].start, 25, "cached errors follow shifted unchanged sentences");
 
   assert(!source.includes("function adjustErrors"), "fragile single-edit offset shifting was removed");
   assert(!source.includes("scheduleDomSync"), "global DOM-driven redraw loop was removed");

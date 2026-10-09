@@ -161,3 +161,15 @@ node tests/test_sentences_suite.js
 2. Öffne in Firefox die Seite `about:debugging#/runtime/this-firefox`.
 3. Klicke auf **„Temporäres Add-on laden…“**.
 4. Wähle die Datei `extension/manifest.json` aus.
+
+---
+
+## Changelog
+
+### Version 1.2.3
+- **Passendere Vorschläge:** Satzkontext und Ähnlichkeit zum geschriebenen Wort werden besser gewichtet.
+- **Groß-/Kleinschreibung:** Schreibweisen werden im Kontext bewertet; doppelte Varianten belegen keinen zusätzlichen Vorschlagsplatz.
+- **Sofortiges Popup:** Vorschläge werden im Hintergrund vorbereitet und beim Öffnen direkt angezeigt.
+- **Weniger Rechenarbeit:** Unveränderte Sätze und bereits berechnete Ergebnisse werden wiederverwendet.
+- **Zuverlässigere Unterstreichungen:** Markierungen bleiben beim Bearbeiten besser an der richtigen Stelle, auch über mehrere Absätze.
+- **Vollständigere Kontextprüfung:** Sie endet nicht mehr nach den ersten 16 passenden Wörtern.
