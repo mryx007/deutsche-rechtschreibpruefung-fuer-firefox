@@ -21,6 +21,7 @@ globalThis.__testExports = {
   normalizeLookupWord,
   detectNounSignal,
   findContextErrors,
+  getGermanCheckTokens,
   tokenize,
   GERMAN_NOUN_SIGNAL_WORDS
 };
@@ -50,6 +51,7 @@ const {
   MLMContextScorer,
   detectNounSignal,
   findContextErrors,
+  getGermanCheckTokens,
   tokenize,
   GERMAN_NOUN_SIGNAL_WORDS
 } = ctx.__testExports;
@@ -465,6 +467,32 @@ async function runContextCoverageTest() {
 
 // Hauptfunktion
 // ----------------------------------------------------------------------------
+async function runLanguageTests() {
+  let detections = 0;
+  ctx.browser = { i18n: { async detectLanguage(text) {
+    detections++;
+    const language = text.includes('application') ? 'en' : text.includes('Bonjour') ? 'fr' : 'de';
+    return { isReliable: !text.includes('uncertain'), languages: [{ language, percentage: 100 }] };
+  } } };
+  try {
+    const text = 'This application works correctly. Die Kinder lernn heute. Bonjour, cette application fonctionne bien.';
+    const tokens = await getGermanCheckTokens(text);
+    assert(tokens.some(token => token.word === 'lernn' && token.start === text.indexOf('lernn')) &&
+      !tokens.some(token => token.word === 'application'),
+      'Fremdsprachige Sätze werden übersprungen, deutsche Tippfehler und Positionen bleiben erhalten');
+    const count = detections;
+    await getGermanCheckTokens(text);
+    assert(detections === count, 'Unveränderte Sätze benötigen keine erneute Spracherkennung');
+    assert((await getGermanCheckTokens('Привет, я рекомендую Twitch через AdGuard.')).length === 0,
+      'Russischer Satz einschließlich lateinischer Produktnamen wird übersprungen');
+    assert((await getGermanCheckTokens('This application is uncertain.')).length > 0,
+      'Unsichere Spracherkennung unterdrückt die Prüfung nicht');
+    ctx.browser.i18n.detectLanguage = async () => { throw new Error('unavailable'); };
+    assert((await getGermanCheckTokens('Wir müsen morgen arbeiten.')).length > 0,
+      'Deutsche Prüfung bleibt bei Ausfall der Spracherkennung aktiv');
+  } finally { delete ctx.browser; }
+}
+
 async function main() {
   const startTime = Date.now();
   console.log("======================================================================");
@@ -476,6 +504,7 @@ async function main() {
   await runMlmWeightTests();
   runRegressionTests();
   await runContextCoverageTest();
+  await runLanguageTests();
 
   const durationMs = Date.now() - startTime;
   console.log("\n======================================================================");

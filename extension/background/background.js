@@ -1878,6 +1878,44 @@ function getLocalContext(text, token, radius = 280) {
   return { text: text.slice(start, end), start: token.start - start, end: token.end - start };
 }
 
+const sentenceLanguageCache = new Map();
+
+async function isForeignLanguageText(text) {
+  const key = text.trim();
+  if (!key) return false;
+  if (sentenceLanguageCache.has(key)) return sentenceLanguageCache.get(key);
+  const pending = (async () => {
+    const letters = key.match(/\p{L}/gu) || [];
+    const latinCount = letters.filter(letter => /\p{Script=Latin}/u.test(letter)).length;
+    if (letters.length >= 2 && latinCount < letters.length / 2) return true;
+    if (typeof browser === "undefined" || !browser.i18n?.detectLanguage) return false;
+    try {
+      const result = await browser.i18n.detectLanguage(key);
+      const languages = [...(result.languages || [])].sort((a, b) => b.percentage - a.percentage);
+      const best = languages[0];
+      return Boolean(result.isReliable && best && best.percentage >= 80 &&
+        !/^(?:de|und)(?:-|$)/i.test(best.language));
+    } catch {
+      // Bei unsicherer oder fehlgeschlagener Erkennung weiter Deutsch prüfen.
+      return false;
+    }
+  })();
+  if (sentenceLanguageCache.size >= 300) sentenceLanguageCache.delete(sentenceLanguageCache.keys().next().value);
+  sentenceLanguageCache.set(key, pending);
+  return pending;
+}
+
+async function getGermanCheckTokens(text) {
+  const tokens = tokenize(text);
+  const spans = Array.from(text.matchAll(/[^.!?…\r\n]+(?:[.!?…]+|[\r\n]+|$)/gu));
+  const foreign = await Promise.all(spans.map(span => isForeignLanguageText(span[0])));
+  let index = 0;
+  return tokens.filter(token => {
+    while (index < spans.length && token.start >= spans[index].index + spans[index][0].length) index++;
+    return !foreign[index] && /\p{Script=Latin}/u.test(token.word);
+  });
+}
+
 async function findContextErrors(engine, text, tokens, existingErrors, checkCase) {
   if (!engine.mlmScorer || text.trim().length < 3) return [];
   const occupiedStarts = new Set(existingErrors.map(error => error.start));
@@ -1984,7 +2022,7 @@ browser.runtime.onMessage.addListener((req, sender, sendResponse) => {
         const eng = await getEngine();
         const text = req.text || req.sentence || "";
         const errors = [];
-        const tokens = tokenize(text);
+        const tokens = await getGermanCheckTokens(text);
         for (const tok of tokens) {
           if (!eng.isCorrect(tok.word, tok.isFirstWord, checkCase)) {
             const isNounSignal = detectNounSignal(text, tok.start);
@@ -2013,7 +2051,7 @@ browser.runtime.onMessage.addListener((req, sender, sendResponse) => {
       try {
         const eng = await getEngine();
         const text = req.text || "";
-        const tokens = tokenize(text);
+        const tokens = await getGermanCheckTokens(text);
         const errors = await findContextErrors(eng, text, tokens, [], checkCase);
         sendResponse({ errors });
       } catch {
